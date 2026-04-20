@@ -1,8 +1,8 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
-import { CheckSquare, TrendingUp, Globe, Zap, MessageSquare, Activity } from "lucide-react";
-import { getIntradayData, updateWeeklyData, updateSnapshot, type Asset, type WeeklyDataRow, type WeeklySnapshot } from "@/app/actions";
+import { CheckSquare, TrendingUp, Globe, Zap, MessageSquare, Activity, RefreshCw } from "lucide-react";
+import { getIntradayData, updateWeeklyData, updateSnapshot, syncAllPrices, type Asset, type WeeklyDataRow, type WeeklySnapshot } from "@/app/actions";
 import { getMonday } from "@/lib/utils";
 
 interface ClientRowData extends Asset {
@@ -99,6 +99,18 @@ export default function WeeklyTracker() {
     await updateSnapshot(activeWeekMonday, field, value);
   };
 
+  const handleSync = async () => {
+    setLoading(true);
+    try {
+      await syncAllPrices(activeWeekMonday);
+      await fetchData();
+    } catch (err) {
+      console.error("Sync failed:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const DAYS = ["mon", "tue", "wed", "thu", "fri"] as const;
 
   if (loading && data.length === 0) {
@@ -149,7 +161,7 @@ export default function WeeklyTracker() {
       </header>
 
       <nav className="bg-slate-50/50 border-b border-slate-200 backdrop-blur-sm">
-        <div className="max-w-full mx-auto px-6">
+        <div className="max-w-full mx-auto px-6 flex items-center justify-between">
           <div className="flex items-center gap-12 overflow-x-auto no-scrollbar">
             {WEEKS_OFFSETS.map((week) => (
               <button
@@ -166,6 +178,15 @@ export default function WeeklyTracker() {
               </button>
             ))}
           </div>
+          
+          <button
+            onClick={handleSync}
+            disabled={loading}
+            className="flex items-center gap-2 px-4 py-2 rounded-full bg-slate-900 text-white text-[10px] font-bold uppercase tracking-widest hover:bg-slate-800 transition-all disabled:opacity-50"
+          >
+            <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
+            {loading ? "Syncing..." : "Sync Prices"}
+          </button>
         </div>
       </nav>
 

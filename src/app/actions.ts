@@ -4,12 +4,86 @@ import { getMonday } from "@/lib/utils";
 import { Client } from "pg";
 import { revalidatePath } from "next/cache";
 
+if (process.env.NODE_ENV === "development") {
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+}
+
 export type Asset = {
   id: number;
   type: 'index' | 'stock';
   category: string;
   name: string;
+  ticker?: string;
 };
+
+// Internal helper to fetch live price from Google Finance
+async function getLivePrice(ticker: string): Promise<string> {
+  try {
+    const url = `https://www.google.com/finance/quote/${ticker}`;
+    const response = await fetch(url, { next: { revalidate: 0 } }); // No cache
+    const text = await response.text();
+    
+    // Simple regex to extract price from the HTML structure Google Finance uses
+    // Usually found in a div with data-last-price or near the ticker header
+    const match = text.match(/data-last-price="([^"]+)"/) || text.match(/class="YMlKec fxKbKc">([^<]+)<\/div>/);
+    
+    if (match && match[1]) {
+      // Remove commas and clean up
+      return match[1].replace(/[^0-9.]/g, '');
+    }
+    return "";
+  } catch (error) {
+    console.error(`Error fetching price for ${ticker}:`, error);
+    return "";
+  }
+}
+
+export async function syncAllPrices(weekMonday: Date) {
+  try {
+    const client = await getClient();
+    const mondayStr = weekMonday.toISOString().split('T')[0];
+    
+    // Determine which day column to update (mon, tue, wed, thu, fri)
+    const today = new Date();
+    const days = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+    const dayName = days[today.getDay()] as 'mon' | 'tue' | 'wed' | 'thu' | 'fri';
+    
+    // Only update if it's a weekday
+    if (!['mon', 'tue', 'wed', 'thu', 'fri'].includes(dayName)) {
+      console.log("Not a weekday, skipping sync.");
+      return;
+    }
+
+    const field = `${dayName}_price`;
+
+    try {
+      const assetsResult = await client.query<Asset>(`SELECT id, ticker FROM assets WHERE ticker IS NOT NULL`);
+      
+      for (const asset of assetsResult.rows) {
+        if (!asset.ticker) continue;
+        
+        const price = await getLivePrice(asset.ticker);
+        if (price) {
+          console.log(`Synced ${asset.ticker}: ${price}`);
+          await client.query(
+            `INSERT INTO weekly_data (asset_id, week_monday, ${field})
+             VALUES ($1, $2, $3)
+             ON CONFLICT (asset_id, week_monday) 
+             DO UPDATE SET ${field} = $3, updated_at = CURRENT_TIMESTAMP`,
+            [asset.id, mondayStr, price]
+          );
+        }
+      }
+    } finally {
+      await client.end();
+    }
+    
+    revalidatePath("/");
+  } catch (error) {
+    console.error("🚀 syncAllPrices error:", error);
+    throw new Error("Failed to sync prices");
+  }
+}
 
 export type WeeklyDataRow = {
   id: number;
@@ -92,6 +166,7 @@ export async function getIntradayData(weekMonday: Date) {
         macro_bias: "", psychology: "", global_cues: "", learnings: ""
       };
 
+      console.log("✅ getIntradayData success for week:", mondayStr);
       return { assets, weeklyData, snapshot };
     } finally {
       await client.end();
