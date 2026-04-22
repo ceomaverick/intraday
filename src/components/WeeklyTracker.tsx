@@ -1,17 +1,17 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
-import { CheckSquare, TrendingUp, Globe, Zap, MessageSquare, Activity, RefreshCw, Save } from "lucide-react";
+import { CheckSquare, TrendingUp, Globe, Zap, MessageSquare, Activity, RefreshCw, Save, Eye, Pencil, X } from "lucide-react";
 import { getIntradayData, saveBatchData, syncAllPrices, type Asset, type WeeklyDataRow, type WeeklySnapshot } from "@/app/actions";
 import { getMonday } from "@/lib/utils";
 
 interface ClientRowData extends Asset {
   days: {
-    mon: { price: string };
-    tue: { price: string };
-    wed: { price: string };
-    thu: { price: string };
-    fri: { price: string };
+    mon: { price: string; notes: string };
+    tue: { price: string; notes: string };
+    wed: { price: string; notes: string };
+    thu: { price: string; notes: string };
+    fri: { price: string; notes: string };
   };
   comments: string;
 }
@@ -34,6 +34,8 @@ export default function WeeklyTracker() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
+  
+  const [noteModal, setNoteModal] = useState<{ assetId: number; day?: string; mode: 'view' | 'edit' } | null>(null);
 
   const currentMonday = getMonday(new Date());
   const activeWeekMonday = new Date(currentMonday);
@@ -50,11 +52,11 @@ export default function WeeklyTracker() {
         return {
           ...asset,
           days: {
-            mon: { price: weekly.mon_price || "" },
-            tue: { price: weekly.tue_price || "" },
-            wed: { price: weekly.wed_price || "" },
-            thu: { price: weekly.thu_price || "" },
-            fri: { price: weekly.fri_price || "" },
+            mon: { price: weekly.mon_price || "", notes: weekly.mon_notes || "" },
+            tue: { price: weekly.tue_price || "", notes: weekly.tue_notes || "" },
+            wed: { price: weekly.wed_price || "", notes: weekly.wed_notes || "" },
+            thu: { price: weekly.thu_price || "", notes: weekly.thu_notes || "" },
+            fri: { price: weekly.fri_price || "", notes: weekly.fri_notes || "" },
           },
           comments: weekly.comments || "",
         };
@@ -74,7 +76,12 @@ export default function WeeklyTracker() {
   }, [fetchData]);
 
   const handlePriceChange = (assetId: number, day: string, value: string) => {
-    setData(prev => prev.map(r => r.id === assetId ? { ...r, days: { ...r.days, [day]: { price: value } } } : r));
+    setData(prev => prev.map(r => r.id === assetId ? { ...r, days: { ...r.days, [day]: { ...r.days[day as keyof typeof r.days], price: value } } } : r));
+    setHasChanges(true);
+  };
+
+  const handleNoteUpdate = (assetId: number, day: string, value: string) => {
+    setData(prev => prev.map(r => r.id === assetId ? { ...r, days: { ...r.days, [day]: { ...r.days[day as keyof typeof r.days], notes: value } } } : r));
     setHasChanges(true);
   };
 
@@ -98,6 +105,11 @@ export default function WeeklyTracker() {
         wed_price: row.days.wed.price,
         thu_price: row.days.thu.price,
         fri_price: row.days.fri.price,
+        mon_notes: row.days.mon.notes,
+        tue_notes: row.days.tue.notes,
+        wed_notes: row.days.wed.notes,
+        thu_notes: row.days.thu.notes,
+        fri_notes: row.days.fri.notes,
         comments: row.comments
       }));
 
@@ -134,7 +146,7 @@ export default function WeeklyTracker() {
     const change = ((cur - prev) / prev) * 100;
     const isPositive = change > 0;
     return (
-      <span className={`ml-1 text-[9px] font-bold ${isPositive ? 'text-emerald-500' : 'text-rose-500'}`}>
+      <span className={`text-xs font-bold ${isPositive ? 'text-emerald-500' : 'text-rose-500'}`}>
         ({isPositive ? '+' : ''}{change.toFixed(2)}%)
       </span>
     );
@@ -150,11 +162,13 @@ export default function WeeklyTracker() {
     );
   }
 
+  const activeNoteAsset = noteModal ? data.find(r => r.id === noteModal.assetId) : null;
+
   return (
     <div className="min-h-screen bg-white font-sans text-slate-900">
       
       <header className="bg-white border-b border-slate-200">
-        <div className="max-w-full mx-auto px-6 py-4 flex flex-col lg:flex-row items-center justify-between gap-6">
+        <div className="max-w-full mx-auto px-0 py-4 flex flex-col lg:flex-row items-center justify-between gap-6">
           <div className="flex items-center gap-4">
             <div className="text-slate-900">
               <TrendingUp size={24} strokeWidth={2.5} />
@@ -190,7 +204,7 @@ export default function WeeklyTracker() {
       </header>
 
       <nav className="bg-slate-50/50 border-b border-slate-200 backdrop-blur-sm">
-        <div className="max-w-full mx-auto px-6 flex items-center justify-between">
+        <div className="max-w-full mx-auto px-0 flex items-center justify-between">
           <div className="flex items-center gap-12 overflow-x-auto no-scrollbar">
             {WEEKS_OFFSETS.map((week) => (
               <button
@@ -235,18 +249,18 @@ export default function WeeklyTracker() {
         </div>
       </nav>
 
-      <main className="px-6 py-4">
+      <main className="px-0 py-4">
         <div className="overflow-x-auto">
           <table className="w-full border-collapse">
             <thead className="bg-white">
               <tr className="border-b border-slate-200">
-                <th className="py-3 px-4 text-left w-64 text-[10px] font-bold text-slate-400 uppercase tracking-widest bg-white">Asset Name</th>
+                <th className="py-3 px-4 text-left w-48 text-[10px] font-bold text-slate-400 uppercase tracking-widest bg-white">Asset Name</th>
                 {DAYS.map(day => (
                   <th key={day} className="py-3 px-4 text-center text-[10px] font-bold text-slate-400 uppercase tracking-widest border-l border-slate-100 bg-white">
                     {day}
                   </th>
                 ))}
-                <th className="py-3 px-4 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest border-l border-slate-100 bg-white">Notes</th>
+                <th className="py-3 px-4 text-center w-24 text-[10px] font-bold text-slate-400 uppercase tracking-widest border-l border-slate-100 bg-white">Notes</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -261,37 +275,60 @@ export default function WeeklyTracker() {
                       </tr>
                     )}
                     <tr className="group hover:bg-slate-50 transition-colors">
-                      <td className="p-4">
-                        <span className={`w-full text-sm font-semibold ${row.type === 'index' ? 'text-slate-900' : 'text-slate-600'}`}>
+                      <td className="px-2 py-1">
+                        <span className={`w-full text-sm font-semibold truncate block ${row.type === 'index' ? 'text-slate-900' : 'text-slate-600'}`}>
                           {row.name}
                         </span>
                       </td>
                       {DAYS.map(day => (
-                        <td key={day} className="p-0 border-l border-slate-100 relative">
-                          <div className="flex flex-col items-center justify-center h-12">
-                            <input
-                              type="text"
-                              value={row.days[day].price}
-                              onChange={(e) => handlePriceChange(row.id, day, e.target.value)}
-                              placeholder="—"
-                              className="w-full text-center bg-transparent outline-none focus:bg-white font-mono font-medium text-xs text-slate-800 placeholder:text-slate-200"
-                            />
-                            {day !== 'mon' && day !== 'tue' && row.days[day].price && row.days.tue.price && (
-                              <div className="absolute bottom-1">
-                                {getPercentageChange(row.days[day].price, row.days.tue.price)}
+                        <td key={day} className="p-0 border-l border-slate-100 min-w-[140px]">
+                          <div className="flex flex-col items-center justify-center h-12 gap-0">
+                            <div className="flex items-center justify-center gap-1.5 w-full px-2">
+                              <input
+                                type="text"
+                                value={row.days[day].price}
+                                onChange={(e) => handlePriceChange(row.id, day, e.target.value)}
+                                placeholder="—"
+                                className="flex-1 min-w-[80px] text-right bg-transparent outline-none focus:bg-white font-mono font-medium text-xs text-slate-800 placeholder:text-slate-200"
+                              />
+                              <div className="flex flex-col gap-1">
+                                <button 
+                                  onClick={() => setNoteModal({ assetId: row.id, day, mode: 'view' })}
+                                  className={`transition-colors ${row.days[day].notes ? 'text-slate-900' : 'text-slate-200 hover:text-slate-400'}`}
+                                >
+                                  <Eye size={12} />
+                                </button>
+                                <button 
+                                  onClick={() => setNoteModal({ assetId: row.id, day, mode: 'edit' })}
+                                  className="text-slate-200 hover:text-slate-400 transition-colors"
+                                >
+                                  <Pencil size={10} />
+                                </button>
                               </div>
-                            )}
+                              {day !== 'mon' && day !== 'tue' && row.days[day].price && row.days.tue.price && (
+                                <div className="text-xs font-mono leading-none flex-shrink-0">
+                                  {getPercentageChange(row.days[day].price, row.days.tue.price)}
+                                </div>
+                              )}
+                            </div>
                           </div>
                         </td>
                       ))}
                       <td className="p-0 border-l border-slate-100">
-                        <input
-                          type="text"
-                          value={row.comments}
-                          onChange={(e) => handleUpdate(row.id, "comments", e.target.value)}
-                          className="w-full h-12 px-4 bg-transparent outline-none text-slate-500 font-normal text-sm"
-                          placeholder="..."
-                        />
+                        <div className="flex items-center justify-center h-12 gap-3">
+                          <button 
+                            onClick={() => setNoteModal({ assetId: row.id, mode: 'view' })}
+                            className={`transition-colors ${row.comments ? 'text-slate-900' : 'text-slate-400 hover:text-slate-900'}`}
+                          >
+                            <Eye size={16} />
+                          </button>
+                          <button 
+                            onClick={() => setNoteModal({ assetId: row.id, mode: 'edit' })}
+                            className="text-slate-400 hover:text-slate-900 transition-colors"
+                          >
+                            <Pencil size={14} />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   </React.Fragment>
@@ -301,27 +338,54 @@ export default function WeeklyTracker() {
           </table>
         </div>
 
-        <div className="mt-12 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
-          {[
-            { title: "Macro Bias", icon: <Globe size={16}/>, key: 'macro_bias' },
-            { title: "Psychology", icon: <Activity size={16}/>, key: 'psychology' },
-            { title: "Global Cues", icon: <Zap size={16}/>, key: 'global_cues' },
-            { title: "Learnings", icon: <MessageSquare size={16}/>, key: 'learnings' }
-          ].map(card => (
-            <div key={card.title} className="flex flex-col gap-3">
-              <div className="flex items-center gap-2 text-slate-400">
-                {card.icon}
-                <span className="text-[10px] font-bold uppercase tracking-[0.2em]">{card.title}</span>
+        {/* Note Modal */}
+        {noteModal && activeNoteAsset && (
+          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-in fade-in duration-200">
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg mx-4 overflow-hidden animate-in zoom-in duration-200">
+              <div className="px-6 py-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+                <h3 className="text-sm font-bold text-slate-900 uppercase tracking-widest">
+                  {noteModal.mode === 'edit' ? 'Edit' : ''} {noteModal.day ? `${noteModal.day.toUpperCase()} Notes` : 'Weekly Notes'}: {activeNoteAsset.name}
+                </h3>
+                <button 
+                  onClick={() => setNoteModal(null)}
+                  className="text-slate-400 hover:text-slate-900 transition-colors"
+                >
+                  <X size={20} />
+                </button>
               </div>
-              <textarea 
-                value={snapshot[card.key as keyof WeeklySnapshot] || ""}
-                onChange={(e) => handleSnapshotUpdate(card.key as keyof WeeklySnapshot, e.target.value)}
-                className="w-full h-32 bg-white border border-slate-200 rounded-lg p-4 text-sm font-normal text-slate-600 outline-none focus:border-slate-900 focus:ring-1 focus:ring-slate-900 transition-all resize-none"
-                placeholder={`Detailed ${card.title.toLowerCase()}...`}
-              />
+              <div className="p-6">
+                {noteModal.mode === 'edit' ? (
+                  <textarea
+                    autoFocus
+                    value={noteModal.day ? (activeNoteAsset.days[noteModal.day as keyof typeof activeNoteAsset.days] as any).notes : activeNoteAsset.comments}
+                    onChange={(e) => {
+                      if (noteModal.day) {
+                        handleNoteUpdate(activeNoteAsset.id, noteModal.day, e.target.value);
+                      } else {
+                        handleUpdate(activeNoteAsset.id, "comments", e.target.value);
+                      }
+                    }}
+                    className="w-full h-48 bg-slate-50 border border-slate-200 rounded-lg p-4 text-sm font-normal text-slate-600 outline-none focus:border-slate-900 focus:ring-1 focus:ring-slate-900 transition-all resize-none"
+                    placeholder="Add notes..."
+                  />
+                ) : (
+                  <div className="min-h-32 text-sm text-slate-600 whitespace-pre-wrap leading-relaxed">
+                    {(noteModal.day ? (activeNoteAsset.days[noteModal.day as keyof typeof activeNoteAsset.days] as any).notes : activeNoteAsset.comments) || 
+                      <span className="text-slate-300 italic">No notes added yet.</span>}
+                  </div>
+                )}
+              </div>
+              <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex justify-end">
+                <button 
+                  onClick={() => setNoteModal(null)}
+                  className="px-6 py-2 rounded-full bg-slate-900 text-white text-[10px] font-bold uppercase tracking-widest hover:bg-slate-800 transition-all"
+                >
+                  {noteModal.mode === 'edit' ? 'Done' : 'Close'}
+                </button>
+              </div>
             </div>
-          ))}
-        </div>
+          </div>
+        )}
       </main>
     </div>
   );

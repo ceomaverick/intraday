@@ -24,18 +24,23 @@ export async function initDatabase() {
         
         mon_price TEXT DEFAULT '',
         mon_traded BOOLEAN DEFAULT FALSE,
+        mon_notes TEXT DEFAULT '',
         
         tue_price TEXT DEFAULT '',
         tue_traded BOOLEAN DEFAULT FALSE,
+        tue_notes TEXT DEFAULT '',
         
         wed_price TEXT DEFAULT '',
         wed_traded BOOLEAN DEFAULT FALSE,
+        wed_notes TEXT DEFAULT '',
         
         thu_price TEXT DEFAULT '',
         thu_traded BOOLEAN DEFAULT FALSE,
+        thu_notes TEXT DEFAULT '',
         
         fri_price TEXT DEFAULT '',
         fri_traded BOOLEAN DEFAULT FALSE,
+        fri_notes TEXT DEFAULT '',
         
         event TEXT DEFAULT '',
         comments TEXT DEFAULT '',

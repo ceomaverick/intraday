@@ -149,6 +149,11 @@ export type WeeklyDataRow = {
   wed_price: string;
   thu_price: string;
   fri_price: string;
+  mon_notes: string;
+  tue_notes: string;
+  wed_notes: string;
+  thu_notes: string;
+  fri_notes: string;
   comments: string;
 };
 
@@ -239,7 +244,11 @@ export async function saveBatchData(
       await client.query('BEGIN');
 
       // Update Weekly Data
-      const allowedDataFields = ['mon_price', 'tue_price', 'wed_price', 'thu_price', 'fri_price', 'comments'];
+      const allowedDataFields = [
+        'mon_price', 'tue_price', 'wed_price', 'thu_price', 'fri_price', 
+        'mon_notes', 'tue_notes', 'wed_notes', 'thu_notes', 'fri_notes', 
+        'comments'
+      ];
       for (const row of weeklyData) {
         const updateFields = Object.keys(row).filter(f => allowedDataFields.includes(f));
         if (updateFields.length === 0) continue;
