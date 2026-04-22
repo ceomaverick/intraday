@@ -11,46 +11,100 @@ if (process.env.NODE_ENV === "development") {
 export type Asset = {
   id: number;
   type: 'index' | 'stock';
-  category: string;
   name: string;
   ticker?: string;
 };
 
-// Internal helper to fetch live price from Google Finance
 async function getLivePrice(ticker: string): Promise<string> {
   try {
+    // We'll try the quote page with specific headers to avoid being blocked
     const url = `https://www.google.com/finance/quote/${ticker}`;
-    const response = await fetch(url, { next: { revalidate: 0 } }); // No cache
+    const response = await fetch(url, {
+      headers: {
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Cache-Control': 'no-cache',
+        'Pragma': 'no-cache',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      },
+      next: { revalidate: 0 }
+    });
     const text = await response.text();
     
-    // Simple regex to extract price from the HTML structure Google Finance uses
-    // Usually found in a div with data-last-price or near the ticker header
-    const match = text.match(/data-last-price="([^"]+)"/) || text.match(/class="YMlKec fxKbKc">([^<]+)<\/div>/);
-    
+    // Pattern 1: Large price display class
+    const priceRegex = /class="YMlKec fxKbKc">([^<]+)<\/div>/;
+    const match = text.match(priceRegex);
     if (match && match[1]) {
-      // Remove commas and clean up
-      return match[1].replace(/[^0-9.]/g, '');
+      const price = match[1].replace(/[^0-9.]/g, '');
+      console.log(`🔍 [Scraper] Found ${ticker} via Pattern 1: ${price}`);
+      return price;
     }
+
+    // Pattern 2: Rupee symbol pattern
+    const rupeeRegex = /₹([0-9,.]+\.[0-9]{2}|[0-9,.]+)/;
+    const rupeeMatch = text.match(rupeeRegex);
+    if (rupeeMatch && rupeeMatch[1]) {
+      const price = rupeeMatch[1].replace(/,/g, '');
+      console.log(`🔍 [Scraper] Found ${ticker} via Rupee Pattern: ${price}`);
+      return price;
+    }
+
+    // Pattern 3: Any currency symbol pattern (generic)
+    const currencyRegex = /[\\$₹¥€£]([0-9,.]+\.[0-9]{2}|[0-9,.]+)/;
+    const currencyMatch = text.match(currencyRegex);
+    if (currencyMatch && currencyMatch[1]) {
+      const price = currencyMatch[1].replace(/,/g, '');
+      console.log(`🔍 [Scraper] Found ${ticker} via Currency Pattern: ${price}`);
+      return price;
+    }
+
+    // Pattern 4: Fallback in case class changed
+    const fallbackRegex = /data-last-price="([^"]+)"/;
+    const fallbackMatch = text.match(fallbackRegex);
+    if (fallbackMatch && fallbackMatch[1]) {
+      const price = fallbackMatch[1].replace(/[^0-9.]/g, '');
+      console.log(`🔍 [Scraper] Found ${ticker} via Pattern 2: ${price}`);
+      return price;
+    }
+
+    // Pattern 3: Search result snippet fallback
+    const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(ticker + ' price')}`;
+    const searchResponse = await fetch(searchUrl, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }
+    });
+    const searchText = await searchResponse.text();
+    const searchRegex = /class="[\w\s]*r0Vp4c[\w\s]*">([^<]+)<\/span>/; // Common Google search price class
+    const searchMatch = searchText.match(searchRegex);
+    if (searchMatch && searchMatch[1]) {
+      const price = searchMatch[1].replace(/[^0-9.]/g, '');
+      console.log(`🔍 [Scraper] Found ${ticker} via Search Fallback: ${price}`);
+      return price;
+    }
+    
+    console.warn(`⚠️ [Scraper] Could not find price for ${ticker}`);
     return "";
   } catch (error) {
-    console.error(`Error fetching price for ${ticker}:`, error);
+    console.error(`❌ [Scraper] Error for ${ticker}:`, error);
     return "";
   }
 }
 
-export async function syncAllPrices(weekMonday: Date) {
+export async function syncAllPrices(weekMonday: Date, targetDay?: string) {
   try {
     const client = await getClient();
     const mondayStr = weekMonday.toISOString().split('T')[0];
     
-    // Determine which day column to update (mon, tue, wed, thu, fri)
-    const today = new Date();
-    const days = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
-    const dayName = days[today.getDay()] as 'mon' | 'tue' | 'wed' | 'thu' | 'fri';
-    
-    // Only update if it's a weekday
+    let dayName = targetDay;
+    if (!dayName) {
+      const today = new Date();
+      const days = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+      dayName = days[today.getDay()];
+    }
+
+    console.log(`🚀 Starting sync for week starting ${mondayStr}, targeting day: ${dayName}`);
+
     if (!['mon', 'tue', 'wed', 'thu', 'fri'].includes(dayName)) {
-      console.log("Not a weekday, skipping sync.");
+      console.log(`⏸️ ${dayName} is not a trading day, skipping sync.`);
       return;
     }
 
@@ -58,13 +112,14 @@ export async function syncAllPrices(weekMonday: Date) {
 
     try {
       const assetsResult = await client.query<Asset>(`SELECT id, ticker FROM assets WHERE ticker IS NOT NULL`);
+      console.log(`📦 Found ${assetsResult.rowCount} assets to sync.`);
       
       for (const asset of assetsResult.rows) {
         if (!asset.ticker) continue;
         
         const price = await getLivePrice(asset.ticker);
         if (price) {
-          console.log(`Synced ${asset.ticker}: ${price}`);
+          console.log(`✅ Saving ${asset.ticker}: ${price} into ${field}`);
           await client.query(
             `INSERT INTO weekly_data (asset_id, week_monday, ${field})
              VALUES ($1, $2, $3)
@@ -90,16 +145,10 @@ export type WeeklyDataRow = {
   asset_id: number;
   week_monday: string;
   mon_price: string;
-  mon_traded: boolean;
   tue_price: string;
-  tue_traded: boolean;
   wed_price: string;
-  wed_traded: boolean;
   thu_price: string;
-  thu_traded: boolean;
   fri_price: string;
-  fri_traded: boolean;
-  event: string;
   comments: string;
 };
 
@@ -118,7 +167,7 @@ async function getClient() {
   let url = process.env.POSTGRES_URL || process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL || "";
   
   // Local workaround for Reliance DNS issue
-  if (process.env.NODE_ENV === "development") {
+  if (process.env.NODE_ENV === "development" && url.includes('neon.tech')) {
     url = url.replace('ep-bitter-band-annhl56z.c-6.us-east-1.aws.neon.tech', '35.173.20.131')
              .replace('ep-bitter-band-annhl56z-pooler.c-6.us-east-1.aws.neon.tech', '35.173.20.131');
     if (url && !url.includes('options=endpoint')) {
@@ -177,6 +226,69 @@ export async function getIntradayData(weekMonday: Date) {
   }
 }
 
+export async function saveBatchData(
+  weekMonday: Date,
+  weeklyData: { asset_id: number, [key: string]: any }[],
+  snapshot: WeeklySnapshot
+) {
+  try {
+    const client = await getClient();
+    const mondayStr = weekMonday.toISOString().split('T')[0];
+
+    try {
+      await client.query('BEGIN');
+
+      // Update Weekly Data
+      const allowedDataFields = ['mon_price', 'tue_price', 'wed_price', 'thu_price', 'fri_price', 'comments'];
+      for (const row of weeklyData) {
+        const updateFields = Object.keys(row).filter(f => allowedDataFields.includes(f));
+        if (updateFields.length === 0) continue;
+
+        const setClause = updateFields.map((f, i) => `${f} = $${i + 3}`).join(', ');
+        const values = updateFields.map(f => row[f]);
+
+        await client.query(
+          `INSERT INTO weekly_data (asset_id, week_monday, ${updateFields.join(', ')})
+           VALUES ($1, $2, ${updateFields.map((_, i) => `$${i + 3}`).join(', ')})
+           ON CONFLICT (asset_id, week_monday) 
+           DO UPDATE SET ${setClause}, updated_at = CURRENT_TIMESTAMP`,
+          [row.asset_id, mondayStr, ...values]
+        );
+      }
+
+
+      // Update Snapshot
+      const allowedSnapshotFields = ['gift_nifty', 'oil', 'rupee', 'asia', 'macro_bias', 'psychology', 'global_cues', 'learnings'];
+      const snapshotUpdateFields = Object.keys(snapshot).filter(f => allowedSnapshotFields.includes(f));
+      
+      if (snapshotUpdateFields.length > 0) {
+        const snapshotSetClause = snapshotUpdateFields.map((f, i) => `${f} = $${i + 2}`).join(', ');
+        const snapshotValues = snapshotUpdateFields.map(f => (snapshot as any)[f]);
+
+        await client.query(
+          `INSERT INTO weekly_snapshots (week_monday, ${snapshotUpdateFields.join(', ')})
+           VALUES ($1, ${snapshotUpdateFields.map((_, i) => `$${i + 2}`).join(', ')})
+           ON CONFLICT (week_monday) 
+           DO UPDATE SET ${snapshotSetClause}, updated_at = CURRENT_TIMESTAMP`,
+          [mondayStr, ...snapshotValues]
+        );
+      }
+
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      await client.end();
+    }
+
+    revalidatePath("/");
+  } catch (error) {
+    console.error("🚀 saveBatchData error:", error);
+    throw new Error("Failed to save changes");
+  }
+}
+
 export async function updateWeeklyData(
   assetId: number, 
   weekMonday: Date, 
@@ -189,8 +301,7 @@ export async function updateWeeklyData(
 
     // Whitelist fields to prevent SQL injection
     const allowedFields = [
-      'mon_price', 'mon_traded', 'tue_price', 'tue_traded', 'wed_price', 'wed_traded',
-      'thu_price', 'thu_traded', 'fri_price', 'fri_traded', 'event', 'comments'
+      'mon_price', 'tue_price', 'wed_price', 'thu_price', 'fri_price', 'event', 'comments'
     ];
 
     if (!allowedFields.includes(field)) {

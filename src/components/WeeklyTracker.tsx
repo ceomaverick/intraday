@@ -1,19 +1,18 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
-import { CheckSquare, TrendingUp, Globe, Zap, MessageSquare, Activity, RefreshCw } from "lucide-react";
-import { getIntradayData, updateWeeklyData, updateSnapshot, syncAllPrices, type Asset, type WeeklyDataRow, type WeeklySnapshot } from "@/app/actions";
+import { CheckSquare, TrendingUp, Globe, Zap, MessageSquare, Activity, RefreshCw, Save } from "lucide-react";
+import { getIntradayData, saveBatchData, syncAllPrices, type Asset, type WeeklyDataRow, type WeeklySnapshot } from "@/app/actions";
 import { getMonday } from "@/lib/utils";
 
 interface ClientRowData extends Asset {
   days: {
-    mon: { price: string; traded: boolean };
-    tue: { price: string; traded: boolean };
-    wed: { price: string; traded: boolean };
-    thu: { price: string; traded: boolean };
-    fri: { price: string; traded: boolean };
+    mon: { price: string };
+    tue: { price: string };
+    wed: { price: string };
+    thu: { price: string };
+    fri: { price: string };
   };
-  event: string;
   comments: string;
 }
 
@@ -33,6 +32,8 @@ export default function WeeklyTracker() {
   });
   const [activeWeekIdx, setActiveWeekIdx] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [hasChanges, setHasChanges] = useState(false);
 
   const currentMonday = getMonday(new Date());
   const activeWeekMonday = new Date(currentMonday);
@@ -40,6 +41,7 @@ export default function WeeklyTracker() {
 
   const fetchData = useCallback(async () => {
     setLoading(true);
+    setHasChanges(false);
     try {
       const result = await getIntradayData(activeWeekMonday);
       
@@ -48,13 +50,12 @@ export default function WeeklyTracker() {
         return {
           ...asset,
           days: {
-            mon: { price: weekly.mon_price || "", traded: weekly.mon_traded || false },
-            tue: { price: weekly.tue_price || "", traded: weekly.tue_traded || false },
-            wed: { price: weekly.wed_price || "", traded: weekly.wed_traded || false },
-            thu: { price: weekly.thu_price || "", traded: weekly.thu_traded || false },
-            fri: { price: weekly.fri_price || "", traded: weekly.fri_traded || false },
+            mon: { price: weekly.mon_price || "" },
+            tue: { price: weekly.tue_price || "" },
+            wed: { price: weekly.wed_price || "" },
+            thu: { price: weekly.thu_price || "" },
+            fri: { price: weekly.fri_price || "" },
           },
-          event: weekly.event || "",
           comments: weekly.comments || "",
         };
       });
@@ -72,34 +73,49 @@ export default function WeeklyTracker() {
     fetchData();
   }, [fetchData]);
 
-  const handlePriceChange = async (assetId: number, day: string, value: string) => {
-    // Optimistic Update
-    setData(prev => prev.map(r => r.id === assetId ? { ...r, days: { ...r.days, [day]: { ...r.days[day as keyof typeof r.days], price: value } } } : r));
-    await updateWeeklyData(assetId, activeWeekMonday, `${day}_price`, value);
+  const handlePriceChange = (assetId: number, day: string, value: string) => {
+    setData(prev => prev.map(r => r.id === assetId ? { ...r, days: { ...r.days, [day]: { price: value } } } : r));
+    setHasChanges(true);
   };
 
-  const toggleTraded = async (assetId: number, day: string) => {
-    const row = data.find(r => r.id === assetId);
-    if (!row) return;
-    const newValue = !row.days[day as keyof typeof row.days].traded;
-    
-    // Optimistic Update
-    setData(prev => prev.map(r => r.id === assetId ? { ...r, days: { ...r.days, [day]: { ...r.days[day as keyof typeof r.days], traded: newValue } } } : r));
-    await updateWeeklyData(assetId, activeWeekMonday, `${day}_traded`, newValue);
-  };
-
-  const handleUpdate = async (assetId: number, field: string, value: string) => {
-    // Optimistic Update
+  const handleUpdate = (assetId: number, field: string, value: string) => {
     setData(prev => prev.map(r => r.id === assetId ? { ...r, [field]: value } : r));
-    await updateWeeklyData(assetId, activeWeekMonday, field, value);
+    setHasChanges(true);
   };
 
-  const handleSnapshotUpdate = async (field: keyof WeeklySnapshot, value: string) => {
+  const handleSnapshotUpdate = (field: keyof WeeklySnapshot, value: string) => {
     setSnapshot(prev => ({ ...prev, [field]: value }));
-    await updateSnapshot(activeWeekMonday, field, value);
+    setHasChanges(true);
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const weeklyBatch = data.map(row => ({
+        asset_id: row.id,
+        mon_price: row.days.mon.price,
+        tue_price: row.days.tue.price,
+        wed_price: row.days.wed.price,
+        thu_price: row.days.thu.price,
+        fri_price: row.days.fri.price,
+        comments: row.comments
+      }));
+
+      await saveBatchData(activeWeekMonday, weeklyBatch, snapshot);
+      setHasChanges(false);
+      console.log("✅ Batch save successful");
+    } catch (err) {
+      console.error("Save failed:", err);
+      alert("Failed to save changes. Please try again.");
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleSync = async () => {
+    if (hasChanges && !confirm("You have unsaved changes. Syncing will overwrite local changes. Continue?")) {
+      return;
+    }
     setLoading(true);
     try {
       await syncAllPrices(activeWeekMonday);
@@ -109,6 +125,19 @@ export default function WeeklyTracker() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const getPercentageChange = (current: string, previous: string) => {
+    const cur = parseFloat(current.replace(/,/g, ''));
+    const prev = parseFloat(previous.replace(/,/g, ''));
+    if (isNaN(cur) || isNaN(prev) || prev === 0) return null;
+    const change = ((cur - prev) / prev) * 100;
+    const isPositive = change > 0;
+    return (
+      <span className={`ml-1 text-[9px] font-bold ${isPositive ? 'text-emerald-500' : 'text-rose-500'}`}>
+        ({isPositive ? '+' : ''}{change.toFixed(2)}%)
+      </span>
+    );
   };
 
   const DAYS = ["mon", "tue", "wed", "thu", "fri"] as const;
@@ -166,7 +195,10 @@ export default function WeeklyTracker() {
             {WEEKS_OFFSETS.map((week) => (
               <button
                 key={week.id}
-                onClick={() => setActiveWeekIdx(week.id)}
+                onClick={() => {
+                  if (hasChanges && !confirm("Unsaved changes will be lost. Continue?")) return;
+                  setActiveWeekIdx(week.id);
+                }}
                 className={`py-4 text-[10px] font-bold uppercase tracking-[0.2em] whitespace-nowrap relative transition-colors ${
                   activeWeekIdx === week.id ? 'text-slate-900' : 'text-slate-400 hover:text-slate-600'
                 }`}
@@ -179,14 +211,27 @@ export default function WeeklyTracker() {
             ))}
           </div>
           
-          <button
-            onClick={handleSync}
-            disabled={loading}
-            className="flex items-center gap-2 px-4 py-2 rounded-full bg-slate-900 text-white text-[10px] font-bold uppercase tracking-widest hover:bg-slate-800 transition-all disabled:opacity-50"
-          >
-            <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
-            {loading ? "Syncing..." : "Sync Prices"}
-          </button>
+          <div className="flex items-center gap-4">
+            {hasChanges && (
+              <button
+                onClick={handleSave}
+                disabled={saving}
+                className="flex items-center gap-2 px-6 py-2 rounded-full bg-emerald-600 text-white text-[10px] font-bold uppercase tracking-widest hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-200 animate-in fade-in zoom-in duration-300"
+              >
+                <Save size={12} className={saving ? "animate-pulse" : ""} />
+                {saving ? "Saving..." : "Save Changes"}
+              </button>
+            )}
+            
+            <button
+              onClick={handleSync}
+              disabled={loading}
+              className="flex items-center gap-2 px-4 py-2 rounded-full bg-slate-900 text-white text-[10px] font-bold uppercase tracking-widest hover:bg-slate-800 transition-all disabled:opacity-50"
+            >
+              <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
+              {loading ? "Syncing..." : "Sync Prices"}
+            </button>
+          </div>
         </div>
       </nav>
 
@@ -195,14 +240,12 @@ export default function WeeklyTracker() {
           <table className="w-full border-collapse">
             <thead className="bg-white">
               <tr className="border-b border-slate-200">
-                <th className="py-3 px-4 text-left w-20 text-[10px] font-bold text-slate-400 uppercase tracking-widest bg-white">Category</th>
                 <th className="py-3 px-4 text-left w-64 text-[10px] font-bold text-slate-400 uppercase tracking-widest bg-white">Asset Name</th>
                 {DAYS.map(day => (
-                  <th key={day} className="py-3 px-4 text-center text-[10px] font-bold text-slate-400 uppercase tracking-widest border-l border-slate-100 bg-white" colSpan={2}>
+                  <th key={day} className="py-3 px-4 text-center text-[10px] font-bold text-slate-400 uppercase tracking-widest border-l border-slate-100 bg-white">
                     {day}
                   </th>
                 ))}
-                <th className="py-3 px-4 text-left w-48 text-[10px] font-bold text-slate-400 uppercase tracking-widest border-l border-slate-100 bg-white">Events</th>
                 <th className="py-3 px-4 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest border-l border-slate-100 bg-white">Notes</th>
               </tr>
             </thead>
@@ -214,54 +257,33 @@ export default function WeeklyTracker() {
                   <React.Fragment key={row.id}>
                     {isNewSection && (
                       <tr className="bg-slate-50/80">
-                        <td colSpan={14} className="h-2 p-0"></td>
+                        <td colSpan={10} className="h-2 p-0"></td>
                       </tr>
                     )}
                     <tr className="group hover:bg-slate-50 transition-colors">
-                      <td className="p-0 text-center font-bold text-[10px] tracking-tight">
-                        <span className={  
-                          row.category === 'HIGH' ? 'text-blue-600' :
-                          row.category === 'MID' ? 'text-slate-400' :
-                          'text-slate-300'
-                        }>{row.category}</span>
-                      </td>
                       <td className="p-4">
                         <span className={`w-full text-sm font-semibold ${row.type === 'index' ? 'text-slate-900' : 'text-slate-600'}`}>
                           {row.name}
                         </span>
                       </td>
                       {DAYS.map(day => (
-                        <React.Fragment key={day}>
-                          <td className="p-0 border-l border-slate-100">
+                        <td key={day} className="p-0 border-l border-slate-100 relative">
+                          <div className="flex flex-col items-center justify-center h-12">
                             <input
                               type="text"
                               value={row.days[day].price}
                               onChange={(e) => handlePriceChange(row.id, day, e.target.value)}
                               placeholder="—"
-                              className="w-full h-12 px-4 text-right bg-transparent outline-none focus:bg-white font-mono font-medium text-xs text-slate-800 placeholder:text-slate-200"
+                              className="w-full text-center bg-transparent outline-none focus:bg-white font-mono font-medium text-xs text-slate-800 placeholder:text-slate-200"
                             />
-                          </td>
-                          <td className="p-0 w-12 border-r border-slate-100 last:border-r-0">
-                            <button
-                              onClick={() => toggleTraded(row.id, day)}
-                              className={`w-full h-12 flex items-center justify-center transition-all ${   
-                                row.days[day].traded ? 'text-emerald-600' : 'text-slate-200 hover:text-slate-400'
-                              }`}
-                            >
-                              <CheckSquare size={16} strokeWidth={row.days[day].traded ? 3 : 2} className={row.days[day].traded ? "opacity-100" : "opacity-30"} />
-                            </button>
-                          </td>
-                        </React.Fragment>
+                            {day !== 'mon' && day !== 'tue' && row.days[day].price && row.days.tue.price && (
+                              <div className="absolute bottom-1">
+                                {getPercentageChange(row.days[day].price, row.days.tue.price)}
+                              </div>
+                            )}
+                          </div>
+                        </td>
                       ))}
-                      <td className="p-0 border-l border-slate-100">
-                        <input
-                          type="text"
-                          value={row.event}
-                          onChange={(e) => handleUpdate(row.id, "event", e.target.value)}
-                          className="w-full h-12 px-4 bg-transparent outline-none text-slate-400 font-medium text-xs"
-                          placeholder="—"
-                        />
-                      </td>
                       <td className="p-0 border-l border-slate-100">
                         <input
                           type="text"
