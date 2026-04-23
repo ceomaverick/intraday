@@ -58,6 +58,9 @@ async function getConnectedClient() {
     }
   });
   
+  const host = url.split('@')[1]?.split('/')[0] || 'unknown host';
+  console.log(`[DB] Connecting to: ${host}`);
+  
   await client.connect();
   return client;
 }
