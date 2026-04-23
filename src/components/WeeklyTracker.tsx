@@ -40,6 +40,30 @@ export default function WeeklyTracker() {
   const [noteModal, setNoteModal] = useState<{ assetId: number; day?: string; mode: 'view' | 'edit' } | null>(null);
   
   const lastFetchedRef = useRef<string>("");
+  const [currentTime, setCurrentTime] = useState(new Date());
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentTime(new Date());
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const formattedTime = currentTime.toLocaleTimeString('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true
+  });
+
+  const formattedDate = currentTime.toLocaleDateString('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    weekday: 'short'
+  });
 
   const activeWeekMonday = useMemo(() => {
     const currentMonday = getMonday(new Date());
@@ -155,8 +179,8 @@ export default function WeeklyTracker() {
     const change = ((cur - prev) / prev) * 100;
     const isPositive = change > 0;
     return (
-      <span className={`text-[10px] font-bold ${isPositive ? 'text-emerald-500' : 'text-rose-500'}`}>
-        ({isPositive ? '+' : ''}{change.toFixed(2)}%)
+      <span className={`font-bold ${isPositive ? 'text-emerald-500' : 'text-rose-500'}`}>
+        {isPositive ? '+' : ''}{change.toFixed(2)}%
       </span>
     );
   };
@@ -253,24 +277,15 @@ export default function WeeklyTracker() {
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center justify-center gap-8">
-            {[
-              { label: "GIFT", key: 'gift_nifty' },
-              { label: "OIL", key: 'oil' },
-              { label: "INR", key: 'rupee' },
-              { label: "ASIA", key: 'asia' }
-            ].map(item => (
-              <div key={item.key} className="flex items-center gap-3">
-                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{item.label}</span>
-                <input
-                  type="text"
-                  value={snapshot[item.key as keyof WeeklySnapshot] || ""}
-                  onChange={(e) => handleSnapshotUpdate(item.key as keyof WeeklySnapshot, e.target.value)}
-                  placeholder="0.00"
-                  className="bg-transparent outline-none border-b border-slate-200 focus:border-slate-900 text-sm font-semibold w-16 text-slate-900 transition-colors py-0.5 text-center"
-                />
-              </div>
-            ))}
+          <div className="flex flex-col items-center lg:items-end text-center lg:text-right">
+            <div className="text-sm font-bold text-slate-900">
+              Welcome, Avinash, happy trading
+            </div>
+            <div className="flex items-center gap-3 text-slate-500 mt-1">
+              <span className="text-[10px] font-bold uppercase tracking-[0.15em]">{formattedDate}</span>
+              <span className="w-px h-3 bg-slate-200" />
+              <span className="text-xs font-bold text-slate-900 tabular-nums">{formattedTime}</span>
+            </div>
           </div>
         </div>
       </header>
@@ -353,17 +368,17 @@ export default function WeeklyTracker() {
 
                         return (
                           <td key={day} className="p-0 border-l border-slate-100 min-w-[200px]">
-                            <div className="flex items-center px-3 h-12 gap-2">
+                            <div className="flex items-center px-3 h-12 gap-4">
                               <input
                                 type="text"
                                 value={row.days[day].price}
                                 onChange={(e) => handlePriceChange(row.id, day, e.target.value)}
                                 placeholder="—"
-                                className="w-16 text-right bg-transparent outline-none focus:bg-white font-mono font-bold text-xs text-slate-900 placeholder:text-slate-200"
+                                className="w-20 text-right bg-transparent outline-none focus:bg-white font-mono font-bold text-sm text-slate-900 placeholder:text-slate-200"
                               />
                               
                               {row.days[day].price && prevDayPrice && (
-                                <div className="text-[10px] font-mono leading-none flex-shrink-0">
+                                <div className="text-sm font-mono leading-none flex-shrink-0">
                                   {getPercentageChange(row.days[day].price, prevDayPrice)}
                                 </div>
                               )}
