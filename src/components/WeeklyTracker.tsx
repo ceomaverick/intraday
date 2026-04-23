@@ -197,6 +197,17 @@ export default function WeeklyTracker() {
     });
   };
 
+  if (!loading && data.length === 0) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-white p-8 text-center">
+        <div className="text-slate-900 font-bold text-lg mb-2">No Assets Found</div>
+        <p className="text-slate-500 text-sm max-w-md">
+          The database appears to be empty. Please ensure you have run the seed scripts to populate the assets table.
+        </p>
+      </div>
+    );
+  }
+
   if (loading && data.length === 0) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-white">

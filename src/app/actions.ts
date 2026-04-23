@@ -1,13 +1,9 @@
 'use server'
 
-import { Client } from "pg";
+import { sql, createPool } from "@vercel/postgres";
 import { revalidatePath } from "next/cache";
 
-// Force recompile: 2026-04-23 18:25
-
-if (process.env.NODE_ENV === "development") {
-  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
-}
+// Force recompile: 2026-04-23 18:45
 
 export type Asset = {
   id: number;
@@ -44,9 +40,18 @@ export type WeeklySnapshot = {
   learnings: string;
 };
 
+/**
+ * Returns a pooled client. 
+ * In development, applies a workaround for Neon connectivity if needed.
+ */
 async function getClient() {
   let url = process.env.POSTGRES_URL || process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL || "";
   
+  if (!url) {
+    throw new Error("Missing database connection string (POSTGRES_URL/DATABASE_URL)");
+  }
+
+  // Workaround for local development with Neon if necessary
   if (process.env.NODE_ENV === "development" && url.includes('neon.tech')) {
     url = url.replace('ep-bitter-band-annhl56z.c-6.us-east-1.aws.neon.tech', '35.173.20.131')
              .replace('ep-bitter-band-annhl56z-pooler.c-6.us-east-1.aws.neon.tech', '35.173.20.131');
@@ -56,74 +61,81 @@ async function getClient() {
     }
   }
 
-  const client = new Client({
+  const pool = createPool({
     connectionString: url,
-    ssl: process.env.NODE_ENV === "development" ? {
-      rejectUnauthorized: false,
-      checkServerIdentity: () => undefined
-    } : { rejectUnauthorized: false }
+    ssl: { rejectUnauthorized: false }
   });
   
-  await client.connect();
-  return client;
+  return await pool.connect();
 }
 
-function formatDate(date: Date): string {
+/**
+ * Ensures consistent date string formatting (YYYY-MM-DD) regardless of timezone.
+ */
+function formatDate(date: Date | string): string {
   const d = new Date(date);
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  // Using UTC methods to avoid local timezone shifts when passing dates from client to server
+  const year = d.getUTCFullYear();
+  const month = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  
+  // If UTC leads to wrong day, fallback to local (Next.js server-side usually UTC)
+  // But since WeeklyTracker sends midnight local, we just want the date part.
+  const locY = d.getFullYear();
+  const locM = String(d.getMonth() + 1).padStart(2, '0');
+  const locD = String(d.getDate()).padStart(2, '0');
+  
+  return `${locY}-${locM}-${locD}`;
 }
 
 export async function getIntradayData(weekMonday: Date | string) {
-  let client: Client | null = null;
+  let client: any = null;
   try {
-    const dateObj = new Date(weekMonday);
-    const mondayStr = formatDate(dateObj);
+    const mondayStr = formatDate(weekMonday);
     
-    const prevDate = new Date(dateObj);
-    prevDate.setDate(dateObj.getDate() - 7);
-    const prevMondayStr = formatDate(prevDate);
+    // Calculate previous week's Monday
+    const dateObj = new Date(weekMonday);
+    dateObj.setDate(dateObj.getDate() - 7);
+    const prevMondayStr = formatDate(dateObj);
+
+    console.log(`[DB] Fetching data for ${mondayStr} (Prev: ${prevMondayStr})`);
 
     client = await getClient();
 
-    // 1. Assets
-    const assetsRes = await client.query<Asset>(`SELECT * FROM assets ORDER BY id ASC`);
-    const assets = assetsRes.rows;
+    // 1. Assets (Critical: if this is empty, nothing renders)
+    const { rows: assets } = await client.query(`SELECT * FROM assets ORDER BY id ASC`);
+    console.log(`[DB] Assets found: ${assets.length}`);
 
     // 2. Weekly Data
-    const dataRes = await client.query<WeeklyDataRow>(
+    const { rows: weeklyData } = await client.query(
       `SELECT * FROM weekly_data WHERE week_monday = $1`,
       [mondayStr]
     );
-    const weeklyData = dataRes.rows;
 
-    // 3. Prev Friday
-    const prevRes = await client.query(
+    // 3. Prev Friday Price
+    const { rows: prevWeeklyData } = await client.query(
       `SELECT asset_id, fri_price FROM weekly_data WHERE week_monday = $1`,
       [prevMondayStr]
     );
-    const prevWeeklyData = prevRes.rows;
 
     // 4. Snapshot
-    const snapRes = await client.query<WeeklySnapshot>(
+    const { rows: snapshots } = await client.query(
       `SELECT * FROM weekly_snapshots WHERE week_monday = $1`,
       [mondayStr]
     );
-    const snapshot = snapRes.rows[0] || {
+    
+    const snapshot = snapshots[0] || {
       gift_nifty: "", oil: "", rupee: "", asia: "",
       macro_bias: "", psychology: "", global_cues: "", learnings: ""
     };
 
-    console.log(`✅ getIntradayData success: ${mondayStr}`);
     return { assets, weeklyData, snapshot, prevWeeklyData };
 
   } catch (error: any) {
     console.error("❌ getIntradayData error:", error.message || error);
-    throw new Error(`Server Error: ${error.message || 'Unknown'}`);
+    throw new Error(`Database Error: ${error.message || 'Unknown'}`);
   } finally {
-    if (client) await client.end();
+    if (client) client.release();
   }
 }
 
@@ -132,12 +144,11 @@ export async function saveBatchData(
   weeklyData: { asset_id: number, [key: string]: string | number }[],
   snapshot: WeeklySnapshot
 ) {
-  let client: Client | null = null;
+  let client: any = null;
   try {
-    const dateObj = new Date(weekMonday);
-    const mondayStr = formatDate(dateObj);
-
+    const mondayStr = formatDate(weekMonday);
     client = await getClient();
+    
     await client.query('BEGIN');
 
     const allowedDataFields = [
@@ -185,7 +196,7 @@ export async function saveBatchData(
     console.error("❌ saveBatchData error:", error.message || error);
     throw new Error(`Save failed: ${error.message || 'Unknown'}`);
   } finally {
-    if (client) await client.end();
+    if (client) client.release();
   }
 }
 
@@ -195,10 +206,9 @@ export async function updateWeeklyData(
   field: string, 
   value: string | boolean
 ) {
-  let client: Client | null = null;
+  let client: any = null;
   try {
-    const dateObj = new Date(weekMonday);
-    const mondayStr = formatDate(dateObj);
+    const mondayStr = formatDate(weekMonday);
 
     const allowedFields = ['mon_price', 'tue_price', 'wed_price', 'thu_price', 'fri_price', 'event', 'comments'];
     if (!allowedFields.includes(field)) throw new Error("Invalid field");
@@ -217,7 +227,7 @@ export async function updateWeeklyData(
     console.error("❌ updateWeeklyData error:", error.message || error);
     throw new Error("Update failed");
   } finally {
-    if (client) await client.end();
+    if (client) client.release();
   }
 }
 
@@ -226,10 +236,9 @@ export async function updateSnapshot(
   field: string, 
   value: string
 ) {
-  let client: Client | null = null;
+  let client: any = null;
   try {
-    const dateObj = new Date(weekMonday);
-    const mondayStr = formatDate(dateObj);
+    const mondayStr = formatDate(weekMonday);
 
     const allowedFields = ['gift_nifty', 'oil', 'rupee', 'asia', 'macro_bias', 'psychology', 'global_cues', 'learnings'];
     if (!allowedFields.includes(field)) throw new Error("Invalid field");
@@ -248,6 +257,6 @@ export async function updateSnapshot(
     console.error("❌ updateSnapshot error:", error.message || error);
     throw new Error("Update failed");
   } finally {
-    if (client) await client.end();
+    if (client) client.release();
   }
 }
