@@ -1,8 +1,8 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
-import { CheckSquare, TrendingUp, Globe, Zap, MessageSquare, Activity, RefreshCw, Save, Eye, Pencil, X } from "lucide-react";
-import { getIntradayData, saveBatchData, syncAllPrices, type Asset, type WeeklyDataRow, type WeeklySnapshot } from "@/app/actions";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { TrendingUp, Save, Eye, Pencil, X } from "lucide-react";
+import { getIntradayData, saveBatchData, type Asset, type WeeklyDataRow, type WeeklySnapshot } from "@/app/actions";
 import { getMonday } from "@/lib/utils";
 
 interface ClientRowData extends Asset {
@@ -14,6 +14,7 @@ interface ClientRowData extends Asset {
     fri: { price: string; notes: string };
   };
   comments: string;
+  prevFriPrice: string;
 }
 
 const WEEKS_OFFSETS = [
@@ -36,19 +37,35 @@ export default function WeeklyTracker() {
   const [hasChanges, setHasChanges] = useState(false);
   
   const [noteModal, setNoteModal] = useState<{ assetId: number; day?: string; mode: 'view' | 'edit' } | null>(null);
+  
+  const lastFetchedRef = useRef<string>("");
 
-  const currentMonday = getMonday(new Date());
-  const activeWeekMonday = new Date(currentMonday);
-  activeWeekMonday.setDate(currentMonday.getDate() + (WEEKS_OFFSETS[activeWeekIdx].offset * 7));
+  const activeWeekMonday = useMemo(() => {
+    const currentMonday = getMonday(new Date());
+    const date = new Date(currentMonday);
+    date.setDate(currentMonday.getDate() + (WEEKS_OFFSETS[activeWeekIdx].offset * 7));
+    return date;
+  }, [activeWeekIdx]);
 
   const fetchData = useCallback(async () => {
+    const year = activeWeekMonday.getFullYear();
+    const month = activeWeekMonday.getMonth();
+    const day = activeWeekMonday.getDate();
+    const weekKey = `${year}-${month}-${day}`;
+
+    if (lastFetchedRef.current === weekKey && data.length > 0) return;
+    
     setLoading(true);
     setHasChanges(false);
+    lastFetchedRef.current = weekKey;
+
     try {
       const result = await getIntradayData(activeWeekMonday);
       
       const clientData: ClientRowData[] = result.assets.map(asset => {
         const weekly = result.weeklyData.find(d => d.asset_id === asset.id) || {} as WeeklyDataRow;
+        const prev = (result as any).prevWeeklyData?.find((d: any) => d.asset_id === asset.id);
+
         return {
           ...asset,
           days: {
@@ -59,6 +76,7 @@ export default function WeeklyTracker() {
             fri: { price: weekly.fri_price || "", notes: weekly.fri_notes || "" },
           },
           comments: weekly.comments || "",
+          prevFriPrice: prev?.fri_price || "",
         };
       });
 
@@ -66,10 +84,11 @@ export default function WeeklyTracker() {
       setSnapshot(result.snapshot);
     } catch (err) {
       console.error("Failed to fetch:", err);
+      lastFetchedRef.current = "";
     } finally {
       setLoading(false);
     }
-  }, [activeWeekIdx]);
+  }, [activeWeekMonday, data.length]);
 
   useEffect(() => {
     fetchData();
@@ -124,35 +143,59 @@ export default function WeeklyTracker() {
     }
   };
 
-  const handleSync = async () => {
-    if (hasChanges && !confirm("You have unsaved changes. Syncing will overwrite local changes. Continue?")) {
-      return;
-    }
-    setLoading(true);
-    try {
-      await syncAllPrices(activeWeekMonday);
-      await fetchData();
-    } catch (err) {
-      console.error("Sync failed:", err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const getPercentageChange = (current: string, previous: string) => {
-    const cur = parseFloat(current.replace(/,/g, ''));
-    const prev = parseFloat(previous.replace(/,/g, ''));
+    if (!current || !previous) return null;
+    const clean = (s: string) => parseFloat(s.replace(/[^0-9.]/g, ''));
+    const cur = clean(current);
+    const prev = clean(previous);
     if (isNaN(cur) || isNaN(prev) || prev === 0) return null;
     const change = ((cur - prev) / prev) * 100;
     const isPositive = change > 0;
     return (
-      <span className={`text-xs font-bold ${isPositive ? 'text-emerald-500' : 'text-rose-500'}`}>
+      <span className={`text-[10px] font-bold ${isPositive ? 'text-emerald-500' : 'text-rose-500'}`}>
         ({isPositive ? '+' : ''}{change.toFixed(2)}%)
       </span>
     );
   };
 
+  const getWeeklyAverageChange = (row: ClientRowData) => {
+    const clean = (s: string) => parseFloat(s.replace(/[^0-9.]/g, ''));
+    const prices = [
+      row.days.mon.price,
+      row.days.tue.price,
+      row.days.wed.price,
+      row.days.thu.price,
+      row.days.fri.price
+    ].map(p => clean(p)).filter(p => !isNaN(p) && p !== 0);
+
+    if (prices.length < 1) return null;
+    
+    const basePrice = row.prevFriPrice ? clean(row.prevFriPrice) : clean(row.days.mon.price);
+    if (isNaN(basePrice) || basePrice === 0) return null;
+
+    const lastPrice = prices[prices.length - 1];
+    const totalChange = ((lastPrice - basePrice) / basePrice) * 100;
+    
+    const isPositive = totalChange > 0;
+    return (
+      <span className={`ml-2 text-[10px] font-bold ${isPositive ? 'text-emerald-500' : 'text-rose-500'}`}>
+        {isPositive ? '+' : ''}{totalChange.toFixed(2)}%
+      </span>
+    );
+  };
+
   const DAYS = ["mon", "tue", "wed", "thu", "fri"] as const;
+
+  const getDayFullDate = (dayIdx: number) => {
+    const date = new Date(activeWeekMonday);
+    date.setDate(activeWeekMonday.getDate() + dayIdx);
+    return date.toLocaleDateString('en-GB', { 
+      weekday: 'short', 
+      day: 'numeric', 
+      month: 'long', 
+      year: 'numeric' 
+    });
+  };
 
   if (loading && data.length === 0) {
     return (
@@ -168,7 +211,7 @@ export default function WeeklyTracker() {
     <div className="min-h-screen bg-white font-sans text-slate-900">
       
       <header className="bg-white border-b border-slate-200">
-        <div className="max-w-full mx-auto px-0 py-4 flex flex-col lg:flex-row items-center justify-between gap-6">
+        <div className="max-w-full mx-auto px-4 py-4 flex flex-col lg:flex-row items-center justify-between gap-6">
           <div className="flex items-center gap-4">
             <div className="text-slate-900">
               <TrendingUp size={24} strokeWidth={2.5} />
@@ -176,7 +219,7 @@ export default function WeeklyTracker() {
             <div>
               <h1 className="text-xl font-bold tracking-tight text-slate-900">Intraday Flow</h1>
               <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">
-                {activeWeekMonday.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })}
+                Week starting {activeWeekMonday.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
               </p>
             </div>
           </div>
@@ -204,7 +247,7 @@ export default function WeeklyTracker() {
       </header>
 
       <nav className="bg-slate-50/50 border-b border-slate-200 backdrop-blur-sm">
-        <div className="max-w-full mx-auto px-0 flex items-center justify-between">
+        <div className="max-w-full mx-auto px-4 flex items-center justify-between">
           <div className="flex items-center gap-12 overflow-x-auto no-scrollbar">
             {WEEKS_OFFSETS.map((week) => (
               <button
@@ -236,28 +279,19 @@ export default function WeeklyTracker() {
                 {saving ? "Saving..." : "Save Changes"}
               </button>
             )}
-            
-            <button
-              onClick={handleSync}
-              disabled={loading}
-              className="flex items-center gap-2 px-4 py-2 rounded-full bg-slate-900 text-white text-[10px] font-bold uppercase tracking-widest hover:bg-slate-800 transition-all disabled:opacity-50"
-            >
-              <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
-              {loading ? "Syncing..." : "Sync Prices"}
-            </button>
           </div>
         </div>
       </nav>
 
-      <main className="px-0 py-4">
+      <main className="px-6 py-4">
         <div className="overflow-x-auto">
           <table className="w-full border-collapse">
             <thead className="bg-white">
               <tr className="border-b border-slate-200">
-                <th className="py-3 px-4 text-left w-48 text-[10px] font-bold text-slate-400 uppercase tracking-widest bg-white">Asset Name</th>
-                {DAYS.map(day => (
+                <th className="py-3 px-4 text-left w-64 text-[10px] font-bold text-slate-400 uppercase tracking-widest bg-white">Asset Name</th>
+                {DAYS.map((day, idx) => (
                   <th key={day} className="py-3 px-4 text-center text-[10px] font-bold text-slate-400 uppercase tracking-widest border-l border-slate-100 bg-white">
-                    {day}
+                    {getDayFullDate(idx)}
                   </th>
                 ))}
                 <th className="py-3 px-4 text-center w-24 text-[10px] font-bold text-slate-400 uppercase tracking-widest border-l border-slate-100 bg-white">Notes</th>
@@ -275,45 +309,54 @@ export default function WeeklyTracker() {
                       </tr>
                     )}
                     <tr className="group hover:bg-slate-50 transition-colors">
-                      <td className="px-2 py-1">
-                        <span className={`w-full text-sm font-semibold truncate block ${row.type === 'index' ? 'text-slate-900' : 'text-slate-600'}`}>
-                          {row.name}
-                        </span>
+                      <td className="px-4 py-1">
+                        <div className="flex items-center">
+                          <span className={`text-sm font-semibold truncate ${row.type === 'index' ? 'text-slate-900' : 'text-slate-600'}`}>
+                            {row.name}
+                          </span>
+                          {getWeeklyAverageChange(row)}
+                        </div>
                       </td>
-                      {DAYS.map(day => (
-                        <td key={day} className="p-0 border-l border-slate-100 min-w-[140px]">
-                          <div className="flex flex-col items-center justify-center h-12 gap-0">
-                            <div className="flex items-center justify-center gap-1.5 w-full px-2">
+                      {DAYS.map((day, idx) => {
+                        const prevDayPrice = idx === 0 
+                          ? row.prevFriPrice 
+                          : row.days[DAYS[idx - 1]].price;
+
+                        return (
+                          <td key={day} className="p-0 border-l border-slate-100 min-w-[200px]">
+                            <div className="flex items-center px-3 h-12 gap-2">
                               <input
                                 type="text"
                                 value={row.days[day].price}
                                 onChange={(e) => handlePriceChange(row.id, day, e.target.value)}
                                 placeholder="—"
-                                className="flex-1 min-w-[80px] text-right bg-transparent outline-none focus:bg-white font-mono font-medium text-xs text-slate-800 placeholder:text-slate-200"
+                                className="w-16 text-right bg-transparent outline-none focus:bg-white font-mono font-bold text-xs text-slate-900 placeholder:text-slate-200"
                               />
-                              <div className="flex flex-col gap-1">
+                              
+                              {row.days[day].price && prevDayPrice && (
+                                <div className="text-[10px] font-mono leading-none flex-shrink-0">
+                                  {getPercentageChange(row.days[day].price, prevDayPrice)}
+                                </div>
+                              )}
+
+                              <div className="flex items-center gap-1.5 ml-auto">
                                 <button 
                                   onClick={() => setNoteModal({ assetId: row.id, day, mode: 'view' })}
-                                  className={`transition-colors ${row.days[day].notes ? 'text-slate-900' : 'text-slate-200 hover:text-slate-400'}`}
+                                  className={`transition-colors ${row.days[day].notes ? 'text-slate-900' : 'text-slate-400 hover:text-slate-600'}`}
                                 >
-                                  <Eye size={12} />
+                                  <Eye size={14} />
                                 </button>
                                 <button 
                                   onClick={() => setNoteModal({ assetId: row.id, day, mode: 'edit' })}
-                                  className="text-slate-200 hover:text-slate-400 transition-colors"
+                                  className="text-slate-400 hover:text-slate-600 transition-colors"
                                 >
-                                  <Pencil size={10} />
+                                  <Pencil size={12} />
                                 </button>
                               </div>
-                              {day !== 'mon' && day !== 'tue' && row.days[day].price && row.days.tue.price && (
-                                <div className="text-xs font-mono leading-none flex-shrink-0">
-                                  {getPercentageChange(row.days[day].price, row.days.tue.price)}
-                                </div>
-                              )}
                             </div>
-                          </div>
-                        </td>
-                      ))}
+                          </td>
+                        );
+                      })}
                       <td className="p-0 border-l border-slate-100">
                         <div className="flex items-center justify-center h-12 gap-3">
                           <button 

@@ -1,8 +1,9 @@
 'use server'
 
-import { getMonday } from "@/lib/utils";
 import { Client } from "pg";
 import { revalidatePath } from "next/cache";
+
+// Force recompile: 2026-04-23 18:25
 
 if (process.env.NODE_ENV === "development") {
   process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
@@ -14,131 +15,6 @@ export type Asset = {
   name: string;
   ticker?: string;
 };
-
-async function getLivePrice(ticker: string): Promise<string> {
-  try {
-    // We'll try the quote page with specific headers to avoid being blocked
-    const url = `https://www.google.com/finance/quote/${ticker}`;
-    const response = await fetch(url, {
-      headers: {
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Cache-Control': 'no-cache',
-        'Pragma': 'no-cache',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-      },
-      next: { revalidate: 0 }
-    });
-    const text = await response.text();
-    
-    // Pattern 1: Large price display class
-    const priceRegex = /class="YMlKec fxKbKc">([^<]+)<\/div>/;
-    const match = text.match(priceRegex);
-    if (match && match[1]) {
-      const price = match[1].replace(/[^0-9.]/g, '');
-      console.log(`🔍 [Scraper] Found ${ticker} via Pattern 1: ${price}`);
-      return price;
-    }
-
-    // Pattern 2: Rupee symbol pattern
-    const rupeeRegex = /₹([0-9,.]+\.[0-9]{2}|[0-9,.]+)/;
-    const rupeeMatch = text.match(rupeeRegex);
-    if (rupeeMatch && rupeeMatch[1]) {
-      const price = rupeeMatch[1].replace(/,/g, '');
-      console.log(`🔍 [Scraper] Found ${ticker} via Rupee Pattern: ${price}`);
-      return price;
-    }
-
-    // Pattern 3: Any currency symbol pattern (generic)
-    const currencyRegex = /[\\$₹¥€£]([0-9,.]+\.[0-9]{2}|[0-9,.]+)/;
-    const currencyMatch = text.match(currencyRegex);
-    if (currencyMatch && currencyMatch[1]) {
-      const price = currencyMatch[1].replace(/,/g, '');
-      console.log(`🔍 [Scraper] Found ${ticker} via Currency Pattern: ${price}`);
-      return price;
-    }
-
-    // Pattern 4: Fallback in case class changed
-    const fallbackRegex = /data-last-price="([^"]+)"/;
-    const fallbackMatch = text.match(fallbackRegex);
-    if (fallbackMatch && fallbackMatch[1]) {
-      const price = fallbackMatch[1].replace(/[^0-9.]/g, '');
-      console.log(`🔍 [Scraper] Found ${ticker} via Pattern 2: ${price}`);
-      return price;
-    }
-
-    // Pattern 3: Search result snippet fallback
-    const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(ticker + ' price')}`;
-    const searchResponse = await fetch(searchUrl, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }
-    });
-    const searchText = await searchResponse.text();
-    const searchRegex = /class="[\w\s]*r0Vp4c[\w\s]*">([^<]+)<\/span>/; // Common Google search price class
-    const searchMatch = searchText.match(searchRegex);
-    if (searchMatch && searchMatch[1]) {
-      const price = searchMatch[1].replace(/[^0-9.]/g, '');
-      console.log(`🔍 [Scraper] Found ${ticker} via Search Fallback: ${price}`);
-      return price;
-    }
-    
-    console.warn(`⚠️ [Scraper] Could not find price for ${ticker}`);
-    return "";
-  } catch (error) {
-    console.error(`❌ [Scraper] Error for ${ticker}:`, error);
-    return "";
-  }
-}
-
-export async function syncAllPrices(weekMonday: Date, targetDay?: string) {
-  try {
-    const client = await getClient();
-    const mondayStr = weekMonday.toISOString().split('T')[0];
-    
-    let dayName = targetDay;
-    if (!dayName) {
-      const today = new Date();
-      const days = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
-      dayName = days[today.getDay()];
-    }
-
-    console.log(`🚀 Starting sync for week starting ${mondayStr}, targeting day: ${dayName}`);
-
-    if (!['mon', 'tue', 'wed', 'thu', 'fri'].includes(dayName)) {
-      console.log(`⏸️ ${dayName} is not a trading day, skipping sync.`);
-      return;
-    }
-
-    const field = `${dayName}_price`;
-
-    try {
-      const assetsResult = await client.query<Asset>(`SELECT id, ticker FROM assets WHERE ticker IS NOT NULL`);
-      console.log(`📦 Found ${assetsResult.rowCount} assets to sync.`);
-      
-      for (const asset of assetsResult.rows) {
-        if (!asset.ticker) continue;
-        
-        const price = await getLivePrice(asset.ticker);
-        if (price) {
-          console.log(`✅ Saving ${asset.ticker}: ${price} into ${field}`);
-          await client.query(
-            `INSERT INTO weekly_data (asset_id, week_monday, ${field})
-             VALUES ($1, $2, $3)
-             ON CONFLICT (asset_id, week_monday) 
-             DO UPDATE SET ${field} = $3, updated_at = CURRENT_TIMESTAMP`,
-            [asset.id, mondayStr, price]
-          );
-        }
-      }
-    } finally {
-      await client.end();
-    }
-    
-    revalidatePath("/");
-  } catch (error) {
-    console.error("🚀 syncAllPrices error:", error);
-    throw new Error("Failed to sync prices");
-  }
-}
 
 export type WeeklyDataRow = {
   id: number;
@@ -171,7 +47,6 @@ export type WeeklySnapshot = {
 async function getClient() {
   let url = process.env.POSTGRES_URL || process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL || "";
   
-  // Local workaround for Reliance DNS issue
   if (process.env.NODE_ENV === "development" && url.includes('neon.tech')) {
     url = url.replace('ep-bitter-band-annhl56z.c-6.us-east-1.aws.neon.tech', '35.173.20.131')
              .replace('ep-bitter-band-annhl56z-pooler.c-6.us-east-1.aws.neon.tech', '35.173.20.131');
@@ -193,182 +68,186 @@ async function getClient() {
   return client;
 }
 
-export async function getIntradayData(weekMonday: Date) {
+function formatDate(date: Date): string {
+  const d = new Date(date);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+export async function getIntradayData(weekMonday: Date | string) {
+  let client: Client | null = null;
   try {
-    const client = await getClient();
-    const mondayStr = weekMonday.toISOString().split('T')[0];
+    const dateObj = new Date(weekMonday);
+    const mondayStr = formatDate(dateObj);
+    
+    const prevDate = new Date(dateObj);
+    prevDate.setDate(dateObj.getDate() - 7);
+    const prevMondayStr = formatDate(prevDate);
 
-    try {
-      // Fetch all assets
-      const assetsResult = await client.query<Asset>(`SELECT * FROM assets ORDER BY id ASC`);
-      const assets = assetsResult.rows;
+    client = await getClient();
 
-      // Fetch weekly data for these assets for the specific week
-      const dataResult = await client.query<WeeklyDataRow>(
-        `SELECT * FROM weekly_data WHERE week_monday = $1`,
-        [mondayStr]
-      );
-      const weeklyData = dataResult.rows;
+    // 1. Assets
+    const assetsRes = await client.query<Asset>(`SELECT * FROM assets ORDER BY id ASC`);
+    const assets = assetsRes.rows;
 
-      // Fetch snapshot for the week
-      const snapshotResult = await client.query<WeeklySnapshot>(
-        `SELECT * FROM weekly_snapshots WHERE week_monday = $1`,
-        [mondayStr]
-      );
-      const snapshot = snapshotResult.rows[0] || {
-        gift_nifty: "", oil: "", rupee: "", asia: "",
-        macro_bias: "", psychology: "", global_cues: "", learnings: ""
-      };
+    // 2. Weekly Data
+    const dataRes = await client.query<WeeklyDataRow>(
+      `SELECT * FROM weekly_data WHERE week_monday = $1`,
+      [mondayStr]
+    );
+    const weeklyData = dataRes.rows;
 
-      console.log("✅ getIntradayData success for week:", mondayStr);
-      return { assets, weeklyData, snapshot };
-    } finally {
-      await client.end();
-    }
-  } catch (error) {
-    console.error("🚀 getIntradayData error:", error);
-    throw new Error("Failed to fetch intraday data");
+    // 3. Prev Friday
+    const prevRes = await client.query(
+      `SELECT asset_id, fri_price FROM weekly_data WHERE week_monday = $1`,
+      [prevMondayStr]
+    );
+    const prevWeeklyData = prevRes.rows;
+
+    // 4. Snapshot
+    const snapRes = await client.query<WeeklySnapshot>(
+      `SELECT * FROM weekly_snapshots WHERE week_monday = $1`,
+      [mondayStr]
+    );
+    const snapshot = snapRes.rows[0] || {
+      gift_nifty: "", oil: "", rupee: "", asia: "",
+      macro_bias: "", psychology: "", global_cues: "", learnings: ""
+    };
+
+    console.log(`✅ getIntradayData success: ${mondayStr}`);
+    return { assets, weeklyData, snapshot, prevWeeklyData };
+
+  } catch (error: any) {
+    console.error("❌ getIntradayData error:", error.message || error);
+    throw new Error(`Server Error: ${error.message || 'Unknown'}`);
+  } finally {
+    if (client) await client.end();
   }
 }
 
 export async function saveBatchData(
-  weekMonday: Date,
-  weeklyData: { asset_id: number, [key: string]: any }[],
+  weekMonday: Date | string,
+  weeklyData: { asset_id: number, [key: string]: string | number }[],
   snapshot: WeeklySnapshot
 ) {
+  let client: Client | null = null;
   try {
-    const client = await getClient();
-    const mondayStr = weekMonday.toISOString().split('T')[0];
+    const dateObj = new Date(weekMonday);
+    const mondayStr = formatDate(dateObj);
 
-    try {
-      await client.query('BEGIN');
+    client = await getClient();
+    await client.query('BEGIN');
 
-      // Update Weekly Data
-      const allowedDataFields = [
-        'mon_price', 'tue_price', 'wed_price', 'thu_price', 'fri_price', 
-        'mon_notes', 'tue_notes', 'wed_notes', 'thu_notes', 'fri_notes', 
-        'comments'
-      ];
-      for (const row of weeklyData) {
-        const updateFields = Object.keys(row).filter(f => allowedDataFields.includes(f));
-        if (updateFields.length === 0) continue;
+    const allowedDataFields = [
+      'mon_price', 'tue_price', 'wed_price', 'thu_price', 'fri_price', 
+      'mon_notes', 'tue_notes', 'wed_notes', 'thu_notes', 'fri_notes', 
+      'comments'
+    ];
 
-        const setClause = updateFields.map((f, i) => `${f} = $${i + 3}`).join(', ');
-        const values = updateFields.map(f => row[f]);
+    for (const row of weeklyData) {
+      const updateFields = Object.keys(row).filter(f => allowedDataFields.includes(f));
+      if (updateFields.length === 0) continue;
 
-        await client.query(
-          `INSERT INTO weekly_data (asset_id, week_monday, ${updateFields.join(', ')})
-           VALUES ($1, $2, ${updateFields.map((_, i) => `$${i + 3}`).join(', ')})
-           ON CONFLICT (asset_id, week_monday) 
-           DO UPDATE SET ${setClause}, updated_at = CURRENT_TIMESTAMP`,
-          [row.asset_id, mondayStr, ...values]
-        );
-      }
+      const setClause = updateFields.map((f, i) => `${f} = $${i + 3}`).join(', ');
+      const values = updateFields.map(f => row[f]);
 
-
-      // Update Snapshot
-      const allowedSnapshotFields = ['gift_nifty', 'oil', 'rupee', 'asia', 'macro_bias', 'psychology', 'global_cues', 'learnings'];
-      const snapshotUpdateFields = Object.keys(snapshot).filter(f => allowedSnapshotFields.includes(f));
-      
-      if (snapshotUpdateFields.length > 0) {
-        const snapshotSetClause = snapshotUpdateFields.map((f, i) => `${f} = $${i + 2}`).join(', ');
-        const snapshotValues = snapshotUpdateFields.map(f => (snapshot as any)[f]);
-
-        await client.query(
-          `INSERT INTO weekly_snapshots (week_monday, ${snapshotUpdateFields.join(', ')})
-           VALUES ($1, ${snapshotUpdateFields.map((_, i) => `$${i + 2}`).join(', ')})
-           ON CONFLICT (week_monday) 
-           DO UPDATE SET ${snapshotSetClause}, updated_at = CURRENT_TIMESTAMP`,
-          [mondayStr, ...snapshotValues]
-        );
-      }
-
-      await client.query('COMMIT');
-    } catch (e) {
-      await client.query('ROLLBACK');
-      throw e;
-    } finally {
-      await client.end();
+      await client.query(
+        `INSERT INTO weekly_data (asset_id, week_monday, ${updateFields.join(', ')})
+         VALUES ($1, $2, ${updateFields.map((_, i) => `$${i + 3}`).join(', ')})
+         ON CONFLICT (asset_id, week_monday) 
+         DO UPDATE SET ${setClause}, updated_at = CURRENT_TIMESTAMP`,
+        [row.asset_id, mondayStr, ...values]
+      );
     }
 
+    const allowedSnapshotFields = ['gift_nifty', 'oil', 'rupee', 'asia', 'macro_bias', 'psychology', 'global_cues', 'learnings'];
+    const snapshotUpdateFields = Object.keys(snapshot).filter(f => allowedSnapshotFields.includes(f));
+    
+    if (snapshotUpdateFields.length > 0) {
+      const snapshotSetClause = snapshotUpdateFields.map((f, i) => `${f} = $${i + 2}`).join(', ');
+      const snapshotValues = snapshotUpdateFields.map(f => (snapshot as any)[f]);
+
+      await client.query(
+        `INSERT INTO weekly_snapshots (week_monday, ${snapshotUpdateFields.join(', ')})
+         VALUES ($1, ${snapshotUpdateFields.map((_, i) => `$${i + 2}`).join(', ')})
+         ON CONFLICT (week_monday) 
+         DO UPDATE SET ${snapshotSetClause}, updated_at = CURRENT_TIMESTAMP`,
+        [mondayStr, ...snapshotValues]
+      );
+    }
+
+    await client.query('COMMIT');
     revalidatePath("/");
-  } catch (error) {
-    console.error("🚀 saveBatchData error:", error);
-    throw new Error("Failed to save changes");
+  } catch (error: any) {
+    if (client) await client.query('ROLLBACK');
+    console.error("❌ saveBatchData error:", error.message || error);
+    throw new Error(`Save failed: ${error.message || 'Unknown'}`);
+  } finally {
+    if (client) await client.end();
   }
 }
 
 export async function updateWeeklyData(
   assetId: number, 
-  weekMonday: Date, 
+  weekMonday: Date | string, 
   field: string, 
   value: string | boolean
 ) {
+  let client: Client | null = null;
   try {
-    const client = await getClient();
-    const mondayStr = weekMonday.toISOString().split('T')[0];
+    const dateObj = new Date(weekMonday);
+    const mondayStr = formatDate(dateObj);
 
-    // Whitelist fields to prevent SQL injection
-    const allowedFields = [
-      'mon_price', 'tue_price', 'wed_price', 'thu_price', 'fri_price', 'event', 'comments'
-    ];
+    const allowedFields = ['mon_price', 'tue_price', 'wed_price', 'thu_price', 'fri_price', 'event', 'comments'];
+    if (!allowedFields.includes(field)) throw new Error("Invalid field");
 
-    if (!allowedFields.includes(field)) {
-      throw new Error("Invalid field name");
-    }
-
-    try {
-      await client.query(
-        `INSERT INTO weekly_data (asset_id, week_monday, ${field})
-         VALUES ($1, $2, $3)
-         ON CONFLICT (asset_id, week_monday) 
-         DO UPDATE SET ${field} = $3, updated_at = CURRENT_TIMESTAMP`,
-        [assetId, mondayStr, value]
-      );
-    } finally {
-      await client.end();
-    }
+    client = await getClient();
+    await client.query(
+      `INSERT INTO weekly_data (asset_id, week_monday, ${field})
+       VALUES ($1, $2, $3)
+       ON CONFLICT (asset_id, week_monday) 
+       DO UPDATE SET ${field} = $3, updated_at = CURRENT_TIMESTAMP`,
+      [assetId, mondayStr, value]
+    );
     
     revalidatePath("/");
-  } catch (error) {
-    console.error("🚀 updateWeeklyData error:", error);
-    throw new Error("Failed to update weekly data");
+  } catch (error: any) {
+    console.error("❌ updateWeeklyData error:", error.message || error);
+    throw new Error("Update failed");
+  } finally {
+    if (client) await client.end();
   }
 }
 
 export async function updateSnapshot(
-  weekMonday: Date, 
+  weekMonday: Date | string, 
   field: string, 
   value: string
 ) {
+  let client: Client | null = null;
   try {
-    const client = await getClient();
-    const mondayStr = weekMonday.toISOString().split('T')[0];
+    const dateObj = new Date(weekMonday);
+    const mondayStr = formatDate(dateObj);
 
-    const allowedFields = [
-      'gift_nifty', 'oil', 'rupee', 'asia', 
-      'macro_bias', 'psychology', 'global_cues', 'learnings'
-    ];
+    const allowedFields = ['gift_nifty', 'oil', 'rupee', 'asia', 'macro_bias', 'psychology', 'global_cues', 'learnings'];
+    if (!allowedFields.includes(field)) throw new Error("Invalid field");
 
-    if (!allowedFields.includes(field)) {
-      throw new Error("Invalid field name");
-    }
-
-    try {
-      await client.query(
-        `INSERT INTO weekly_snapshots (week_monday, ${field})
-         VALUES ($1, $2)
-         ON CONFLICT (week_monday) 
-         DO UPDATE SET ${field} = $2, updated_at = CURRENT_TIMESTAMP`,
-        [mondayStr, value]
-      );
-    } finally {
-      await client.end();
-    }
+    client = await getClient();
+    await client.query(
+      `INSERT INTO weekly_snapshots (week_monday, ${field})
+       VALUES ($1, $2)
+       ON CONFLICT (week_monday) 
+       DO UPDATE SET ${field} = $2, updated_at = CURRENT_TIMESTAMP`,
+      [mondayStr, value]
+    );
 
     revalidatePath("/");
-  } catch (error) {
-    console.error("🚀 updateSnapshot error:", error);
-    throw new Error("Failed to update snapshot");
+  } catch (error: any) {
+    console.error("❌ updateSnapshot error:", error.message || error);
+    throw new Error("Update failed");
+  } finally {
+    if (client) await client.end();
   }
 }
