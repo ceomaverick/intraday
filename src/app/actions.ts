@@ -1,9 +1,9 @@
 'use server'
 
-import { createClient } from "@vercel/postgres";
+import { Client } from "pg";
 import { revalidatePath } from "next/cache";
 
-// Force recompile: 2026-04-23 19:45
+// Force recompile: 2026-04-23 20:10
 
 export type Asset = {
   id: number;
@@ -41,18 +41,31 @@ export type WeeklySnapshot = {
 };
 
 /**
- * Returns a direct client. 
- * Using createClient as requested by Vercel for the provided connection string.
+ * Returns a standard pg Client.
+ * Bypasses @vercel/postgres checks to ensure compatibility across environments.
  */
 async function getConnectedClient() {
-  const url = process.env.POSTGRES_URL || process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL || "";
+  let url = process.env.DATABASE_URL_UNPOOLED || process.env.POSTGRES_URL || process.env.DATABASE_URL || "";
   
   if (!url) {
     throw new Error("Missing database connection string");
   }
 
-  const client = createClient({
+  // Workaround for local development with Neon
+  if (process.env.NODE_ENV === "development" && url.includes('neon.tech')) {
+    url = url.replace('ep-bitter-band-annhl56z.c-6.us-east-1.aws.neon.tech', '35.173.20.131')
+             .replace('ep-bitter-band-annhl56z-pooler.c-6.us-east-1.aws.neon.tech', '35.173.20.131');
+    if (!url.includes('options=endpoint')) {
+      const separator = url.includes('?') ? '&' : '?';
+      url += `${separator}options=endpoint%3Dep-bitter-band-annhl56z`;
+    }
+  }
+
+  const client = new Client({
     connectionString: url,
+    ssl: {
+      rejectUnauthorized: false
+    }
   });
   
   await client.connect();
