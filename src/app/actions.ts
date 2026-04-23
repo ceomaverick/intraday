@@ -65,10 +65,20 @@ async function getConnectedClient() {
 
 function formatDate(date: Date | string): string {
   const d = new Date(date);
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  
+  // If the time is late (e.g., 18:30 UTC), it's likely a local midnight from 
+  // an Eastern timezone (like IST) that shifted back to the previous day in UTC.
+  // We bump it forward to ensure we format the intended calendar day.
+  if (d.getUTCHours() >= 18) {
+    d.setUTCDate(d.getUTCDate() + 1);
+  }
+  
+  const year = d.getUTCFullYear();
+  const month = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  
+  const formatted = `${year}-${month}-${day}`;
+  return formatted;
 }
 
 export async function getIntradayData(weekMonday: Date | string) {
@@ -79,7 +89,7 @@ export async function getIntradayData(weekMonday: Date | string) {
     dateObj.setDate(dateObj.getDate() - 7);
     const prevMondayStr = formatDate(dateObj);
 
-    client = await getConnectedClient();
+    console.log(`[DB] Querying Data for: ${mondayStr}`);
 
     // Run sequentially to avoid "client is already executing" error
     const assetsRes = await client.query(`SELECT * FROM assets ORDER BY id ASC`);
