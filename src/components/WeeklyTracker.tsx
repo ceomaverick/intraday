@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { TrendingUp, Save, Eye, Pencil, X } from "lucide-react";
-import { getIntradayData, saveBatchData, type Asset, type WeeklyDataRow, type WeeklySnapshot } from "@/app/actions";
+import { getIntradayData, saveBatchData, type Asset, type WeeklyDataRow } from "@/app/actions";
 import { getMonday } from "@/lib/utils";
 
 interface ClientRowData extends Asset {
@@ -27,10 +27,6 @@ const WEEKS_OFFSETS = [
 
 export default function WeeklyTracker() {
   const [data, setData] = useState<ClientRowData[]>([]);
-  const [snapshot, setSnapshot] = useState<WeeklySnapshot>({
-    gift_nifty: "", oil: "", rupee: "", asia: "",
-    macro_bias: "", psychology: "", global_cues: "", learnings: ""
-  });
   const [activeWeekIdx, setActiveWeekIdx] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -107,7 +103,6 @@ export default function WeeklyTracker() {
       });
 
       setData(clientData);
-      setSnapshot(result.snapshot);
     } catch (err: any) {
       console.error("Failed to fetch:", err);
       setError(err.message || "Failed to load data from server");
@@ -136,11 +131,6 @@ export default function WeeklyTracker() {
     setHasChanges(true);
   };
 
-  const handleSnapshotUpdate = (field: keyof WeeklySnapshot, value: string) => {
-    setSnapshot(prev => ({ ...prev, [field]: value }));
-    setHasChanges(true);
-  };
-
   const handleSave = async () => {
     setSaving(true);
     try {
@@ -159,7 +149,7 @@ export default function WeeklyTracker() {
         comments: row.comments
       }));
 
-      await saveBatchData(activeWeekMonday, weeklyBatch, snapshot);
+      await saveBatchData(activeWeekMonday, weeklyBatch);
       setHasChanges(false);
       console.log("✅ Batch save successful");
     } catch (err) {

@@ -52,26 +52,6 @@ async function initDatabase() {
       );
     `;
 
-    // Create Weekly Snapshots Table
-    await sql`
-      CREATE TABLE IF NOT EXISTS weekly_snapshots (
-        id SERIAL PRIMARY KEY,
-        week_monday DATE UNIQUE NOT NULL,
-        
-        gift_nifty TEXT DEFAULT '',
-        oil TEXT DEFAULT '',
-        rupee TEXT DEFAULT '',
-        asia TEXT DEFAULT '',
-        
-        macro_bias TEXT DEFAULT '',
-        psychology TEXT DEFAULT '',
-        global_cues TEXT DEFAULT '',
-        learnings TEXT DEFAULT '',
-        
-        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-      );
-    `;
-
     console.log("Database initialized successfully!");
   } catch (error) {
     console.error("Error initializing database:", error);

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Inter, Roboto_Mono } from "next/font/google";
 import "./globals.css";
+import { WeeklyTrackerProvider } from "@/components/WeeklyTrackerProvider";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -27,7 +28,11 @@ export default function RootLayout({
       lang="en"
       className={`${inter.variable} ${robotoMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col">
+        <WeeklyTrackerProvider>
+          {children}
+        </WeeklyTrackerProvider>
+      </body>
     </html>
   );
 }

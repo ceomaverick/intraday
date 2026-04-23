@@ -29,17 +29,6 @@ export type WeeklyDataRow = {
   comments: string;
 };
 
-export type WeeklySnapshot = {
-  gift_nifty: string;
-  oil: string;
-  rupee: string;
-  asia: string;
-  macro_bias: string;
-  psychology: string;
-  global_cues: string;
-  learnings: string;
-};
-
 async function getConnectedClient() {
   const url = process.env.POSTGRES_URL || process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL || "";
   
@@ -97,17 +86,10 @@ export async function getIntradayData(weekMonday: Date | string) {
     const assetsRes = await client.query(`SELECT * FROM assets ORDER BY id ASC`);
     const dataRes = await client.query(`SELECT * FROM weekly_data WHERE week_monday = $1`, [mondayStr]);
     const prevRes = await client.query(`SELECT asset_id, fri_price FROM weekly_data WHERE week_monday = $1`, [prevMondayStr]);
-    const snapRes = await client.query(`SELECT * FROM weekly_snapshots WHERE week_monday = $1`, [mondayStr]);
-
-    const snapshot = snapRes.rows[0] || {
-      gift_nifty: "", oil: "", rupee: "", asia: "",
-      macro_bias: "", psychology: "", global_cues: "", learnings: ""
-    };
 
     return { 
       assets: assetsRes.rows as Asset[], 
       weeklyData: dataRes.rows as WeeklyDataRow[], 
-      snapshot: snapshot as WeeklySnapshot, 
       prevWeeklyData: prevRes.rows 
     };
 
@@ -121,8 +103,7 @@ export async function getIntradayData(weekMonday: Date | string) {
 
 export async function saveBatchData(
   weekMonday: Date | string,
-  weeklyData: { asset_id: number, [key: string]: string | number }[],
-  snapshot: WeeklySnapshot
+  weeklyData: { asset_id: number, [key: string]: string | number }[]
 ) {
   let client: any = null;
   try {
@@ -153,24 +134,9 @@ export async function saveBatchData(
       );
     }
 
-    const allowedSnapshotFields = ['gift_nifty', 'oil', 'rupee', 'asia', 'macro_bias', 'psychology', 'global_cues', 'learnings'];
-    const snapshotUpdateFields = Object.keys(snapshot).filter(f => allowedSnapshotFields.includes(f));
-    
-    if (snapshotUpdateFields.length > 0) {
-      const snapshotSetClause = snapshotUpdateFields.map((f, i) => `${f} = $${i + 2}`).join(', ');
-      const snapshotValues = snapshotUpdateFields.map(f => (snapshot as any)[f]);
-
-      await client.query(
-        `INSERT INTO weekly_snapshots (week_monday, ${snapshotUpdateFields.join(', ')})
-         VALUES ($1, ${snapshotUpdateFields.map((_, i) => `$${i + 2}`).join(', ')})
-         ON CONFLICT (week_monday) 
-         DO UPDATE SET ${snapshotSetClause}, updated_at = CURRENT_TIMESTAMP`,
-        [mondayStr, ...snapshotValues]
-      );
-    }
-
     await client.query('COMMIT');
     revalidatePath("/");
+    revalidatePath("/cards");
   } catch (error: any) {
     if (client) await client.query('ROLLBACK');
     console.error("❌ saveBatchData error:", error.message);
@@ -203,38 +169,9 @@ export async function updateWeeklyData(
     );
     
     revalidatePath("/");
+    revalidatePath("/cards");
   } catch (error: any) {
     console.error("❌ updateWeeklyData error:", error.message);
-    throw new Error("Update failed");
-  } finally {
-    if (client) await client.end();
-  }
-}
-
-export async function updateSnapshot(
-  weekMonday: Date | string, 
-  field: string, 
-  value: string
-) {
-  let client: any = null;
-  try {
-    const mondayStr = formatDate(weekMonday);
-    const allowedFields = ['gift_nifty', 'oil', 'rupee', 'asia', 'macro_bias', 'psychology', 'global_cues', 'learnings'];
-    if (!allowedFields.includes(field)) throw new Error("Invalid field");
-
-    client = await getConnectedClient();
-
-    await client.query(
-      `INSERT INTO weekly_snapshots (week_monday, ${field})
-       VALUES ($1, $2)
-       ON CONFLICT (week_monday) 
-       DO UPDATE SET ${field} = $2, updated_at = CURRENT_TIMESTAMP`,
-      [mondayStr, value]
-    );
-
-    revalidatePath("/");
-  } catch (error: any) {
-    console.error("❌ updateSnapshot error:", error.message);
     throw new Error("Update failed");
   } finally {
     if (client) await client.end();
