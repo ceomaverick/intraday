@@ -3,7 +3,7 @@
 import { Client } from "pg";
 import { revalidatePath } from "next/cache";
 
-// Force recompile: 2026-04-23 20:25
+// Force recompile: 2026-04-23 20:45
 
 export type Asset = {
   id: number;
@@ -40,10 +40,6 @@ export type WeeklySnapshot = {
   learnings: string;
 };
 
-/**
- * Returns a standard pg Client.
- * Uses standard TCP connection for maximum compatibility across environments.
- */
 async function getConnectedClient() {
   const url = process.env.POSTGRES_URL || process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL || "";
   
@@ -53,9 +49,7 @@ async function getConnectedClient() {
 
   const client = new Client({
     connectionString: url,
-    ssl: {
-      rejectUnauthorized: false
-    }
+    ssl: { rejectUnauthorized: false }
   });
   
   const host = url.split('@')[1]?.split('/')[0] || 'unknown host';
@@ -83,12 +77,11 @@ export async function getIntradayData(weekMonday: Date | string) {
 
     client = await getConnectedClient();
 
-    const [assetsRes, dataRes, prevRes, snapRes] = await Promise.all([
-      client.query(`SELECT * FROM assets ORDER BY id ASC`),
-      client.query(`SELECT * FROM weekly_data WHERE week_monday = $1`, [mondayStr]),
-      client.query(`SELECT asset_id, fri_price FROM weekly_data WHERE week_monday = $1`, [prevMondayStr]),
-      client.query(`SELECT * FROM weekly_snapshots WHERE week_monday = $1`, [mondayStr])
-    ]);
+    // Run sequentially to avoid "client is already executing" error
+    const assetsRes = await client.query(`SELECT * FROM assets ORDER BY id ASC`);
+    const dataRes = await client.query(`SELECT * FROM weekly_data WHERE week_monday = $1`, [mondayStr]);
+    const prevRes = await client.query(`SELECT asset_id, fri_price FROM weekly_data WHERE week_monday = $1`, [prevMondayStr]);
+    const snapRes = await client.query(`SELECT * FROM weekly_snapshots WHERE week_monday = $1`, [mondayStr]);
 
     const snapshot = snapRes.rows[0] || {
       gift_nifty: "", oil: "", rupee: "", asia: "",
