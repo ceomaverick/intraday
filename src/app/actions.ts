@@ -91,6 +91,8 @@ export async function getIntradayData(weekMonday: Date | string) {
 
     console.log(`[DB] Querying Data for: ${mondayStr}`);
 
+    client = await getConnectedClient();
+
     // Run sequentially to avoid "client is already executing" error
     const assetsRes = await client.query(`SELECT * FROM assets ORDER BY id ASC`);
     const dataRes = await client.query(`SELECT * FROM weekly_data WHERE week_monday = $1`, [mondayStr]);
