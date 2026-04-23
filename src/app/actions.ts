@@ -1,9 +1,9 @@
 'use server'
 
-import { createPool } from "@vercel/postgres";
+import { createClient } from "@vercel/postgres";
 import { revalidatePath } from "next/cache";
 
-// Force recompile: 2026-04-23 19:25
+// Force recompile: 2026-04-23 19:45
 
 export type Asset = {
   id: number;
@@ -40,24 +40,23 @@ export type WeeklySnapshot = {
   learnings: string;
 };
 
-// Singleton pool to prevent connection leaks
-let globalPool: any = null;
-
-function getPool() {
-  if (globalPool) return globalPool;
-
+/**
+ * Returns a direct client. 
+ * Using createClient as requested by Vercel for the provided connection string.
+ */
+async function getConnectedClient() {
   const url = process.env.POSTGRES_URL || process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL || "";
   
   if (!url) {
     throw new Error("Missing database connection string");
   }
 
-  globalPool = createPool({
+  const client = createClient({
     connectionString: url,
-    ssl: { rejectUnauthorized: false }
   });
   
-  return globalPool;
+  await client.connect();
+  return client;
 }
 
 function formatDate(date: Date | string): string {
@@ -76,8 +75,7 @@ export async function getIntradayData(weekMonday: Date | string) {
     dateObj.setDate(dateObj.getDate() - 7);
     const prevMondayStr = formatDate(dateObj);
 
-    const pool = getPool();
-    client = await pool.connect();
+    client = await getConnectedClient();
 
     const [assetsRes, dataRes, prevRes, snapRes] = await Promise.all([
       client.query(`SELECT * FROM assets ORDER BY id ASC`),
@@ -102,7 +100,7 @@ export async function getIntradayData(weekMonday: Date | string) {
     console.error("❌ getIntradayData error:", error.message);
     throw new Error(`Database Error: ${error.message}`);
   } finally {
-    if (client) client.release();
+    if (client) await client.end();
   }
 }
 
@@ -114,8 +112,7 @@ export async function saveBatchData(
   let client: any = null;
   try {
     const mondayStr = formatDate(weekMonday);
-    const pool = getPool();
-    client = await pool.connect();
+    client = await getConnectedClient();
     
     await client.query('BEGIN');
 
@@ -164,7 +161,7 @@ export async function saveBatchData(
     console.error("❌ saveBatchData error:", error.message);
     throw new Error(`Save failed: ${error.message}`);
   } finally {
-    if (client) client.release();
+    if (client) await client.end();
   }
 }
 
@@ -180,8 +177,7 @@ export async function updateWeeklyData(
     const allowedFields = ['mon_price', 'tue_price', 'wed_price', 'thu_price', 'fri_price', 'event', 'comments'];
     if (!allowedFields.includes(field)) throw new Error("Invalid field");
 
-    const pool = getPool();
-    client = await pool.connect();
+    client = await getConnectedClient();
 
     await client.query(
       `INSERT INTO weekly_data (asset_id, week_monday, ${field})
@@ -196,7 +192,7 @@ export async function updateWeeklyData(
     console.error("❌ updateWeeklyData error:", error.message);
     throw new Error("Update failed");
   } finally {
-    if (client) client.release();
+    if (client) await client.end();
   }
 }
 
@@ -211,8 +207,7 @@ export async function updateSnapshot(
     const allowedFields = ['gift_nifty', 'oil', 'rupee', 'asia', 'macro_bias', 'psychology', 'global_cues', 'learnings'];
     if (!allowedFields.includes(field)) throw new Error("Invalid field");
 
-    const pool = getPool();
-    client = await pool.connect();
+    client = await getConnectedClient();
 
     await client.query(
       `INSERT INTO weekly_snapshots (week_monday, ${field})
@@ -227,6 +222,6 @@ export async function updateSnapshot(
     console.error("❌ updateSnapshot error:", error.message);
     throw new Error("Update failed");
   } finally {
-    if (client) client.release();
+    if (client) await client.end();
   }
 }
