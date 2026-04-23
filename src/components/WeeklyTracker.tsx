@@ -33,6 +33,7 @@ export default function WeeklyTracker() {
   });
   const [activeWeekIdx, setActiveWeekIdx] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
   
@@ -56,6 +57,7 @@ export default function WeeklyTracker() {
     if (lastFetchedRef.current === weekKey && data.length > 0) return;
     
     setLoading(true);
+    setError(null);
     setHasChanges(false);
     lastFetchedRef.current = weekKey;
 
@@ -82,8 +84,9 @@ export default function WeeklyTracker() {
 
       setData(clientData);
       setSnapshot(result.snapshot);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Failed to fetch:", err);
+      setError(err.message || "Failed to load data from server");
       lastFetchedRef.current = "";
     } finally {
       setLoading(false);
@@ -196,6 +199,21 @@ export default function WeeklyTracker() {
       year: 'numeric' 
     });
   };
+
+  if (error) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-white p-8 text-center">
+        <div className="text-rose-600 font-bold text-lg mb-2">Server Error</div>
+        <p className="text-slate-500 text-sm max-w-md mb-6">{error}</p>
+        <button 
+          onClick={() => fetchData()}
+          className="px-6 py-2 rounded-full bg-slate-900 text-white text-[10px] font-bold uppercase tracking-widest hover:bg-slate-800 transition-all"
+        >
+          Try Again
+        </button>
+      </div>
+    );
+  }
 
   if (!loading && data.length === 0) {
     return (
