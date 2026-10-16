@@ -39,3 +39,11 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# global repo config boundaries
+.env*.local
+/dist
+/.turbo
+/ignore
+/aiskills
+/design
